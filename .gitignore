@@ -1,0 +1,25 @@
+# private research and superseded drafts
+notes/
+
+# secrets
+.env
+.env.*
+!.env.example
+*-keypair.json
+keys/
+
+# build output
+node_modules/
+.next/
+.vercel/
+dist/
+coverage/
+test-ledger/
+*.tsbuildinfo
+
+# Xcode
+xcuserdata/
+DerivedData/
+.DS_Store
+.claude/settings.local.json
+.claude/worktrees/
