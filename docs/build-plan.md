@@ -55,7 +55,7 @@ raw    = floor(shares / multiplier × 10^8)      stored, transferred
 shown  = raw / 10^8 × effective multiplier
 ```
 
-A scheduled multiplier applies only from its effective timestamp. Round down, in integer/decimal arithmetic. Reference case: $10.00 at $229.52 and multiplier 1 shows 0.0436. A script changes the multiplier to demonstrate a dividend.
+A scheduled multiplier applies only from its effective timestamp (inclusive). Round down, in integer (bigint) arithmetic: `raw`, `shown` (as 10⁻⁸ units) and current value in cents all floor. Only the display string rounds to the nearest 4th decimal, and the UI shows it as "≈". Reference case: $10.00 at $229.52 and multiplier 1 gives raw 4356918 and shows 0.0436; the same raw at multiplier 1.002 shows 0.0437. Wrapping under 1.002 gives raw 4348222, which still shows 0.0436. Code: `packages/shared/src/money.ts`. A script changes the multiplier to demonstrate a dividend.
 
 **Two-version trap:** `@solana/spl-token` 0.4.15 has the scaled-UI helpers but needs web3.js v1; npm's latest is v3.
 
@@ -116,6 +116,20 @@ JSON. Errors: `{ error: { code, message } }`.
 | `POST /api/groups/:id/contributions` | — | `{name, usdCents, idempotencyKey}`. Atomic; rejects amounts above the remainder; reaching the goal moves to `wrapped` |
 
 `GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening, and group totals plus contributor names. "Token" is `Authorization: Bearer <claimToken>`. Rate-limit creation, since it draws down the treasury.
+
+### Contract details
+
+The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; this summarizes them. All objects are strict: unknown keys fail validation.
+
+- **Tickers** in the API are the underlying symbols `NVDA AAPL SPY TSLA COST`; `TOKEN_SYMBOLS` maps them to `tNVDA`… Names are 1–40 characters, notes 1–280, `opensAt` is ISO 8601 with offset.
+- **Public gift** (`GET`, and the body of `open` and `swap`): `{id, kind, status, senderName, recipientName, opensAt, createdAt}` plus, by state:
+  - single `wrapped`: nothing else. A single gift is never `funding`.
+  - group `funding`/`wrapped`: `ticker, goalCents, raisedCents, contributors` (names only).
+  - `opened` and later: `usdCents, note, tokenRaw, openedAt, value{priceCents, priceSource, priceUpdatedAt, multiplier, shares, valueCents}`, plus `ticker` for singles.
+  - `claiming`: `recipientWallet, claimSignature|null`. `claimed`: `recipientWallet, claimSignature, claimedAt`.
+- **Claim response:** 200 `{status:"claimed", signature, gift}`; 202 `{status:"pending", signature|null, gift}`.
+- **Contribution response:** `{contribution{id, name, usdCents, createdAt}, gift}`. A retried idempotency key returns the original contribution.
+- **Error codes → HTTP:** `bad_request`, `validation_failed`, `invalid_wallet` 400; `unauthorized` 401; `forbidden` 403; `not_found` 404; `invalid_state`, `exceeds_remaining` 409; `too_early` 425; `rate_limited` 429; `internal` 500; `chain_unavailable` 503.
 
 ### Claim must never pay twice
 
