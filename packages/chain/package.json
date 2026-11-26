@@ -8,9 +8,19 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:validator": "tsx scripts/with-validator.ts vitest run -c vitest.validator.config.ts --reporter=verbose",
+    "setup:mints": "tsx src/scripts/setup-mints.ts",
+    "multiplier": "tsx src/scripts/update-multiplier.ts"
   },
   "dependencies": {
-    "@stoked/shared": "workspace:*"
+    "@solana/spl-token": "^0.4.15",
+    "@solana/spl-token-metadata": "^0.1.6",
+    "@solana/web3.js": "^1.95.5",
+    "@stoked/shared": "workspace:*",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
   }
 }
