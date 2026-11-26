@@ -168,3 +168,24 @@ export const ClaimGiftResponse = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("pending"), signature: TransactionSignature.nullable(), gift: PublicGift }),
 ]);
 export type ClaimGiftResponse = z.infer<typeof ClaimGiftResponse>;
+
+// ---------- wallet (GET /api/wallets/:address) ----------
+
+export const TokenHolding = z.strictObject({
+  ticker: Ticker,
+  /** Raw units held on chain. */
+  tokenRaw: RawAmount,
+  multiplier: MultiplierString,
+  /** Display shares, e.g. "0.0436". */
+  shares: z.string().regex(/^\d+\.\d+$/),
+  /** Raw × multiplier, floored to 8 decimals, e.g. "0.04356918". */
+  sharesExact: z.string().regex(/^\d+(\.\d+)?$/),
+});
+export type TokenHolding = z.infer<typeof TokenHolding>;
+
+/** Only tokens with a non-zero balance are listed, in TICKERS order. */
+export const WalletResponse = z.strictObject({
+  wallet: WalletAddress,
+  holdings: z.array(TokenHolding),
+});
+export type WalletResponse = z.infer<typeof WalletResponse>;

@@ -22,8 +22,10 @@ export default defineConfig({
   webServer: {
     command: `pnpm exec next build && pnpm exec next start -p ${PORT} -H 127.0.0.1`,
     url: `http://127.0.0.1:${PORT}`,
-    reuseExistingServer: !process.env.CI,
+    // Never reuse: a server from another build might not be in fixture mode.
+    reuseExistingServer: false,
     timeout: 240_000,
-    env: { NEXT_TELEMETRY_DISABLED: "1" },
+    // UI tests run on fixtures; e2e-flow (playwright.flow.config.ts) runs the real API and chain.
+    env: { NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_STOKED_CLIENT: "fixture" },
   },
 });

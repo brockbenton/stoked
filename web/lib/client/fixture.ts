@@ -6,12 +6,17 @@
 import {
   FIXTURE_SIGNATURE,
   FIXTURE_WALLET,
+  displayShares,
   fixtureValue,
   fixtures,
+  formatUnits,
+  rawToShownUnits,
+  usdToRaw,
   type ClaimGiftResponse,
   type CreateGiftRequest,
   type PublicGift,
   type Ticker,
+  DEMO_PRICES_CENTS,
 } from "@stoked/shared";
 import { GiftClientError, type GiftClient, type WalletSource } from "./types";
 
@@ -185,11 +190,32 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
         if (g.status === "claimed") return { status: "claimed", signature: g.claimSignature, gift: g };
         throw new GiftClientError("invalid_state", "Open the gift first");
       }),
+
+    getWallet: (address) =>
+      respond(() => {
+        const one = { num: 1n, den: 1n };
+        const raw = usdToRaw(1000, DEMO_PRICES_CENTS.tNVDA, one);
+        return {
+          wallet: address,
+          holdings: [
+            {
+              ticker: "tNVDA" as const,
+              tokenRaw: raw.toString(),
+              multiplier: "1",
+              shares: displayShares(raw, one),
+              sharesExact: formatUnits(rawToShownUnits(raw, one)),
+            },
+          ],
+        };
+      }),
   };
 }
 
-/** Fixed placeholder wallet until G4 adds the on-device key. */
-export const fixtureWallet: WalletSource = { getAddress: async () => FIXTURE_WALLET };
+/** Fixed placeholder wallet for UI tests. */
+export const fixtureWallet: WalletSource = {
+  getAddress: async () => FIXTURE_WALLET,
+  peekAddress: async () => FIXTURE_WALLET,
+};
 
 export function parseSim(search: string): Set<Sim> {
   const values = new URLSearchParams(search).getAll("sim").flatMap((v) => v.split(","));

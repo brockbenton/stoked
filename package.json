@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "test:e2e": "pnpm --filter @stoked/web test:e2e"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

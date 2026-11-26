@@ -9,6 +9,7 @@ import { GiftBox } from "@/components/GiftBox";
 import { Sheet } from "@/components/Sheet";
 import { ValueLine } from "@/components/ValueLine";
 import { GiftClientError, getGiftClient, getWallet, readTokenFromHash } from "@/lib/client";
+import { useGiftPoll } from "@/lib/client/use-gift-poll";
 import { formatOpensAt, shortAddress, stockName, stockSymbol } from "@/lib/format";
 
 type Load = { k: "loading" } | { k: "error"; code: string } | { k: "ready"; gift: PublicGift };
@@ -46,13 +47,20 @@ export function GiftScreen({ id }: { id: string }) {
   const [offline, setOffline] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const polling = useRef(false);
+  // Bumped when this tab changes the gift, so an older background poll can't undo it.
+  const version = useRef(0);
 
   const gift = load.k === "ready" ? load.gift : null;
-  const setGift = (g: PublicGift) => setLoad({ k: "ready", gift: g });
+  const setGift = useCallback((g: PublicGift) => {
+    version.current += 1;
+    setLoad({ k: "ready", gift: g });
+  }, []);
 
   const unwrapping = useRef(false);
   const loadRef = useRef(load);
   loadRef.current = load;
+  const claimRef = useRef(claim);
+  claimRef.current = claim;
 
   const fetchGift = useCallback(async () => {
     setLoad({ k: "loading" });
@@ -79,6 +87,11 @@ export function GiftScreen({ id }: { id: string }) {
   useEffect(() => {
     setToken(readTokenFromHash(window.location.hash));
     setOffline(!navigator.onLine);
+    // Pasting the private link over the public one only changes the fragment: no reload.
+    const onHash = () => {
+      setToken(readTokenFromHash(window.location.hash));
+      void fetchGift();
+    };
     const on = () => {
       setOffline(false);
       // Reload if the page couldn't load while offline.
@@ -87,21 +100,59 @@ export function GiftScreen({ id }: { id: string }) {
     const off = () => setOffline(true);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
+    window.addEventListener("hashchange", onHash);
     void fetchGift();
     return () => {
+      window.removeEventListener("hashchange", onHash);
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
   }, [fetchGift]);
 
-  const finishClaim = useCallback((g: PublicGift) => {
-    setGift(g);
-    setClaim({ k: "idle" });
-    setSheet(null);
-    setJustClaimed(true);
-  }, []);
+  const finishClaim = useCallback(
+    async (g: PublicGift) => {
+      // Say "your wallet" only if it is: the claim may have been made on another device.
+      // Look it up first, so the sheet closes in the same render that shows the notice
+      // and focus can move to it.
+      const mine = await getWallet()
+        .peekAddress()
+        .catch(() => null);
+      setGift(g);
+      setClaim({ k: "idle" });
+      setSheet(null);
+      if (g.status === "claimed" && g.recipientWallet === mine) setJustClaimed(true);
+      else setAlreadyClaimed(true);
+    },
+    [setGift],
+  );
 
-  /** Poll while a claim is pending; flag it as stuck (retryable) after a while. */
+  /** A change seen by the background poll: another tab or device acted on the gift. */
+  useGiftPoll(
+    gift,
+    (g) => {
+      const before = loadRef.current.k === "ready" ? loadRef.current.gift.status : null;
+      setNow(Date.now());
+      if (g.status === "claimed" && before !== "claimed") {
+        if (claimRef.current.k === "idle") {
+          setLoad({ k: "ready", gift: g });
+          setSheet(null);
+          setAlreadyClaimed(true);
+        } else void finishClaim(g);
+        return;
+      }
+      setLoad({ k: "ready", gift: g });
+      if (!token) return;
+      if (g.status !== "wrapped") setSheet((s) => (s === "box" ? "reveal" : s));
+      if (g.status === "claiming" && claimRef.current.k === "idle") setClaim({ k: "pending", stuck: false });
+    },
+    version,
+  );
+
+  /**
+   * While a claim is pending, repeat the claim request: that is what moves it
+   * forward on the server, and it can never pay twice. Flag it as stuck
+   * (retryable) after a while.
+   */
   useEffect(() => {
     if (claim.k !== "pending" || claim.stuck || polling.current) return;
     polling.current = true;
@@ -111,14 +162,16 @@ export function GiftScreen({ id }: { id: string }) {
         await sleep(POLL_MS);
         if (cancelled) break;
         try {
-          const g = await getGiftClient().getGift(id);
-          if (g.status === "claimed") {
-            finishClaim(g);
+          const current = loadRef.current.k === "ready" ? loadRef.current.gift : null;
+          if (current?.status !== "claiming") break;
+          const res = await getGiftClient().claimGift(id, token, current.recipientWallet);
+          if (res.status === "claimed") {
             polling.current = false;
+            void finishClaim(res.gift);
             return;
           }
         } catch {
-          // keep polling; the claim is safe server-side
+          // keep trying; the claim is safe server-side
         }
       }
       polling.current = false;
@@ -128,7 +181,7 @@ export function GiftScreen({ id }: { id: string }) {
       cancelled = true;
       polling.current = false;
     };
-  }, [claim, id, finishClaim]);
+  }, [claim, id, token, finishClaim]);
 
   async function unwrap() {
     // One open at a time: the box stays clickable (aria-disabled) during the animation.
@@ -169,13 +222,21 @@ export function GiftScreen({ id }: { id: string }) {
       // A claim in progress is bound to its wallet; retries must reuse it.
       const wallet = gift?.status === "claiming" ? gift.recipientWallet : await getWallet().getAddress();
       const res = await getGiftClient().claimGift(id, token, wallet);
-      if (res.status === "claimed") finishClaim(res.gift);
+      if (res.status === "claimed") await finishClaim(res.gift);
       else {
         setGift(res.gift);
         setClaim({ k: "pending", stuck: false });
       }
     } catch (e) {
       const code = codeOf(e);
+      if (code === "wallet_unavailable") {
+        setClaim({
+          k: "failed",
+          message:
+            "This browser couldn't create a wallet. Open your link in an up-to-date browser, outside private mode. Nothing was sent.",
+        });
+        return;
+      }
       if (code === "validation_failed" || code === "invalid_wallet" || code === "unauthorized" || code === "forbidden") {
         setClaim({
           k: "failed",
@@ -256,6 +317,13 @@ export function GiftScreen({ id }: { id: string }) {
                   <strong>{gift.recipientName} claimed it.</strong> The tokens are in wallet{" "}
                   {shortAddress(gift.recipientWallet)}.
                 </>
+              )}
+              {isRecipient && (
+                <p>
+                  <Link href="/w" className="notice__link">
+                    See your wallet
+                  </Link>
+                </p>
               )}
             </div>
           )}
