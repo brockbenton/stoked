@@ -9,19 +9,25 @@
     "start": "next start",
     "typecheck": "next typegen && tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:validator": "tsx ../packages/chain/scripts/with-validator.ts vitest run -c vitest.validator.config.ts --reporter=verbose"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.99.0",
     "@stoked/chain": "workspace:*",
     "@stoked/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.119.2",
     "next": "^16.4.6",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.1",
+    "@electric-sql/pglite": "^0.6.0",
     "@playwright/test": "^1.65.1",
     "@types/react": "^19.3.3",
-    "@types/react-dom": "^19.3.0"
+    "@types/react-dom": "^19.3.0",
+    "tsx": "^4.23.15"
   }
 }
