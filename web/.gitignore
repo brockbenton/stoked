@@ -1,0 +1,4 @@
+# Playwright output, including the screenshots (regenerated on every run; they
+# contain random ids and tokens, so committing them dirties the tree).
+test-results/
+playwright-report/
