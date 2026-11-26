@@ -94,7 +94,7 @@ alter table gifts enable row level security;
 alter table prices enable row level security;
 ```
 
-A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes.
+A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes. A second migration grants `service_role` select, insert and update, because Supabase may not grant new tables automatically.
 
 ## API
 
