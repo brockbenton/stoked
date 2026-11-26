@@ -10,7 +10,7 @@ Read `docs/build-plan.md` before coding. It owns the contracts. `docs/goals.md` 
 - **Web first.** Mac access is unconfirmed, so nothing may depend on iOS. Extension work starts only on a Mac with Xcode.
 - **One TypeScript backend:** Next.js route handlers, with Supabase for Postgres. Edge Functions were dropped: the web app is needed regardless, and there's no Docker or Deno here for the local Supabase stack.
 - **Wallet:** keypair generated on the recipient's device. Only the public key leaves it. Embedded wallets are out of scope.
-- **Chip-in** starts only after the 1:1 flow passes end to end.
+- **P2P only.** Group chip-in is deferred: not built before the Nov 27 window, and only considered after the 1:1 flow passes end to end.
 
 ## Rules
 
@@ -20,7 +20,7 @@ Read `docs/build-plan.md` before coding. It owns the contracts. `docs/goals.md` 
 - Display amount = raw × effective multiplier. Transfers use raw units. Money is integer cents; raw token units are bigint (strings in JSON).
 - Pin `@solana/web3.js` to v1 (`^1.95.5`): `@solana/spl-token` 0.4.x requires it and npm's latest is v3.
 - Change the API or schema in `docs/build-plan.md` in the same commit as the code.
-- Simulated things say so in the UI: devnet tokens, unpaid contributions, demo prices, prototype chat threads.
+- Simulated things say so in the UI: devnet tokens, demo prices, prototype chat threads.
 - Don't call anything novel or "the first" without a current search.
 - Open-source libraries are fine; don't copy another hackathon project.
 

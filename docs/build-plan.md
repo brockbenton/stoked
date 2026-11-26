@@ -21,7 +21,8 @@ So a deployed link matters, and a treasury that just transfers tokens is thin on
 | Tier | Contents |
 |---|---|
 | **Must** | Mints, API, web send → unwrap → claim on devnet, deployed link, video |
-| **Should** | Group chip-in, escrow program, conversation view |
+| **Should** | Escrow program, conversation view |
+| **Deferred** | Group chip-in. Nothing is built before the Nov 27 window; revisit only after the 1:1 gate |
 | **If Mac** | iMessage extension |
 | **Could** | Price feed, voice note |
 | **Cut** | Real money, accounts, Base, embedded wallets, notifications, expiry and refunds (the treasury funds gifts, so nobody is owed one until escrow) |
@@ -47,7 +48,7 @@ pnpm workspace. Vitest for tests; PGlite runs the real migrations without Docker
 
 ## Tokens
 
-Five Token-2022 mints: `tNVDA tAAPL tSPY tTSLA tCOST` (Costco is in the group mockup). 8 decimals, multiplier 1.0, metadata. Setup is idempotent.
+Five Token-2022 mints: `tNVDA tAAPL tSPY tTSLA tCOST`. These symbols are the tickers everywhere: API, database and UI. 8 decimals, multiplier 1.0, metadata. Setup is idempotent.
 
 ```
 shares = usdCents / priceCents
@@ -55,7 +56,7 @@ raw    = floor(shares / multiplier × 10^8)      stored, transferred
 shown  = raw / 10^8 × effective multiplier
 ```
 
-A scheduled multiplier applies only from its effective timestamp. Round down, in integer/decimal arithmetic. Reference case: $10.00 at $229.52 and multiplier 1 shows 0.0436. A script changes the multiplier to demonstrate a dividend.
+A scheduled multiplier applies only from its effective timestamp (inclusive). Round down, in integer (bigint) arithmetic: `raw`, `shown` (as 10⁻⁸ units) and current value in cents all floor. Only the display string rounds to the nearest 4th decimal, and the UI shows it as "≈". Reference case: $10.00 at $229.52 and multiplier 1 gives raw 4356918 and shows 0.0436; the same raw at multiplier 1.002 shows 0.0437. Wrapping under 1.002 gives raw 4348222, which still shows 0.0436. Code: `packages/shared/src/money.ts`. A script changes the multiplier to demonstrate a dividend.
 
 **Two-version trap:** `@solana/spl-token` 0.4.15 has the scaled-UI helpers but needs web3.js v1; npm's latest is v3.
 
@@ -64,14 +65,13 @@ A scheduled multiplier applies only from its effective timestamp. Round down, in
 ```sql
 create table gifts (
   id uuid primary key default gen_random_uuid(),
-  kind text not null check (kind in ('single','group')),
-  status text not null check (status in ('funding','wrapped','opened','claiming','claimed')),
+  status text not null check (status in ('wrapped','opened','claiming','claimed')),
   sender_name text not null,
   recipient_name text not null,
-  ticker text not null,
+  ticker text not null,                -- token symbol, e.g. 'tNVDA'
   usd_cents integer not null check (usd_cents > 0),
-  price_cents integer,                 -- set when wrapped
-  token_raw numeric(39,0),             -- set when wrapped
+  price_cents integer not null,        -- price used to size the gift
+  token_raw numeric(39,0) not null,    -- raw units reserved for the gift
   note text,
   opens_at timestamptz,
   claim_token_hash text not null,      -- sha256; the plain token is returned once
@@ -82,24 +82,19 @@ create table gifts (
   opened_at timestamptz,
   claimed_at timestamptz
 );
-create table contributions (
-  id uuid primary key default gen_random_uuid(),
-  gift_id uuid not null references gifts(id),
-  idempotency_key uuid not null,
-  contributor_name text not null,
-  usd_cents integer not null check (usd_cents > 0),
-  created_at timestamptz not null default now(),
-  unique (gift_id, idempotency_key)
-);
+
 create table prices (
-  ticker text primary key,
+  ticker text primary key,             -- token symbol, e.g. 'tNVDA'
   usd_cents integer not null,
   source text not null,
   updated_at timestamptz not null default now()
 );
+
+alter table gifts enable row level security;
+alter table prices enable row level security;
 ```
 
-RLS on, no public policies: only the server reads or writes.
+A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes.
 
 ## API
 
@@ -108,14 +103,24 @@ JSON. Errors: `{ error: { code, message } }`.
 | Route | Auth | Behavior |
 |---|---|---|
 | `POST /api/gifts` | — | `{senderName, recipientName, ticker, usdCents, note?, opensAt?}` → `{id, claimToken}`. Amount is 1000, 2500 or 5000 |
-| `GET /api/gifts/:id` | — | Public state. Before opening, a single gift's ticker, amount and note are **absent**, not just hidden |
+| `GET /api/gifts/:id` | — | Public state. Before opening, the gift's ticker, amount and note are **absent**, not just hidden |
 | `POST /api/gifts/:id/open` | token | `wrapped → opened`. 425 `too_early` before `opensAt` (server clock) |
 | `POST /api/gifts/:id/swap` | token | `{ticker}`, only while `opened`; same USD value |
 | `POST /api/gifts/:id/claim` | token | `{wallet}`. 200 claimed, 202 pending |
-| `POST /api/groups` | — | `{organizerName, recipientName, ticker, goalCents, opensAt?, note?}` → `{id, claimToken}`. Goal at most 10000 |
-| `POST /api/groups/:id/contributions` | — | `{name, usdCents, idempotencyKey}`. Atomic; rejects amounts above the remainder; reaching the goal moves to `wrapped` |
 
-`GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening, and group totals plus contributor names. "Token" is `Authorization: Bearer <claimToken>`. Rate-limit creation, since it draws down the treasury.
+`GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening. "Token" is `Authorization: Bearer <claimToken>`. Rate-limit creation, since it draws down the treasury.
+
+### Contract details
+
+The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; this summarizes them. All objects are strict: unknown keys fail validation.
+
+- **Tickers** are the token symbols `tNVDA tAAPL tSPY tTSLA tCOST`; `UNDERLYING` maps each to its stock (`NVDA`, "Nvidia") for display. Names are 1–40 characters, notes 1–280, `opensAt` is ISO 8601 with offset.
+- **Public gift** (`GET`, and the body of `open` and `swap`): `{id, status, senderName, recipientName, opensAt, createdAt}` plus, by state:
+  - `wrapped`: nothing else.
+  - `opened` and later: `ticker, usdCents, note, tokenRaw, openedAt, value{priceCents, priceSource, priceUpdatedAt, multiplier, shares, valueCents}`.
+  - `claiming`: `recipientWallet, claimSignature|null`. `claimed`: `recipientWallet, claimSignature, claimedAt`.
+- **Claim response:** 200 `{status:"claimed", signature, gift}`; 202 `{status:"pending", signature|null, gift}`.
+- **Error codes → HTTP:** `bad_request`, `validation_failed`, `invalid_wallet` 400; `unauthorized` 401; `forbidden` 403; `not_found` 404; `invalid_state` 409; `too_early` 425; `rate_limited` 429; `internal` 500; `chain_unavailable` 503.
 
 ### Claim must never pay twice
 
@@ -127,8 +132,7 @@ JSON. Errors: `{ error: { code, message } }`.
 
 ### Who can claim
 
-- **Single:** the link carries the token, `/g/:id#t=…`. The fragment stays out of server logs and preview crawlers.
-- **Group:** the group link has **no token**, or anyone in the chat could take the gift. The organizer gets the token once and sends the recipient a private link.
+The link carries the token, `/g/:id#t=…`. The fragment stays out of server logs and preview crawlers.
 
 ## Clients
 
@@ -136,7 +140,7 @@ JSON. Errors: `{ error: { code, message } }`.
 
 **Conversation view:** `/demo` shows sender and recipient threads side by side using the real components and API, labeled "Prototype thread". Link previews are frozen, so without iOS this is how the live card is demonstrated.
 
-**iOS:** Messages exposes participants only as UUIDs, so the host app asks for a display name. `MSMessage.url` carries the gift id; its query carries the token for single gifts.
+**iOS:** Messages exposes participants only as UUIDs, so the host app asks for a display name. `MSMessage.url` carries the gift id; its query carries the token.
 
 ## Schedule
 
@@ -144,11 +148,11 @@ JSON. Errors: `{ error: { code, message } }`.
 |---|---|
 | Wed 25 – Thu 26 | Accounts. G0, then G1 and G2 in parallel |
 | Fri 27 | G3, G4, first deploy. **Noon: decide on the Mac** |
-| Sat 28 | G5 done by noon = 1:1 gate. Then G6 and G8 in parallel, or G9 with a Mac |
+| Sat 28 | G5 done by noon = 1:1 gate. Then G8, or G9 with a Mac |
 | Sat night | Feature freeze on anything not merged; record a backup video |
 | Sun 29 | G10, final video, submit hours before the cutoff |
 
-If the 1:1 gate slips past Saturday noon, cut G8 first, then G6.
+If the 1:1 gate slips past Saturday noon, cut G8.
 
 ## Needed from the owner
 
@@ -176,11 +180,10 @@ If the 1:1 gate slips past Saturday noon, cut G8 first, then G6.
 ## Demo, 90 seconds
 
 1. First shares are awkward to gift; crypto links bounce you out of the chat.
-2. Send $10 of NVDA. A wrapped card appears.
+2. Send $10 of tNVDA. A wrapped card appears.
 3. Unwrap, claim, show the devnet transaction.
 4. The same card changes to Opened with its value; bump the multiplier and show the share count rise.
-5. Three friends chip in toward Costco for Grandma.
-6. State plainly: devnet test tokens, and what's next.
+5. State plainly: devnet test tokens, and what's next.
 
 ## Stretch decision: escrow
 
