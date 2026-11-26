@@ -1,32 +1,29 @@
 /**
- * API contract for docs/build-plan.md § API. Every object is strict: unknown
- * keys are rejected, which is how "absent, not just hidden" is enforced for a
- * wrapped gift's ticker, amount and note.
+ * API contract for docs/build-plan.md § API (1:1 gifts only). Every object is
+ * strict: unknown keys are rejected, which is how "absent, not just hidden" is
+ * enforced for a wrapped gift's ticker, amount and note.
  */
 import { z } from "zod";
 
 // ---------- primitives ----------
 
-/** Underlying tickers. The devnet token for NVDA is tNVDA, and so on. */
-export const TICKERS = ["NVDA", "AAPL", "SPY", "TSLA", "COST"] as const;
+/** Devnet Token-2022 symbols. These are the tickers everywhere: API, database, UI. */
+export const TICKERS = ["tNVDA", "tAAPL", "tSPY", "tTSLA", "tCOST"] as const;
 export const Ticker = z.enum(TICKERS);
 export type Ticker = z.infer<typeof Ticker>;
 
-export const TOKEN_SYMBOLS = {
-  NVDA: "tNVDA",
-  AAPL: "tAAPL",
-  SPY: "tSPY",
-  TSLA: "tTSLA",
-  COST: "tCOST",
-} as const satisfies Record<Ticker, string>;
+/** The stock each test token tracks, for display. */
+export const UNDERLYING = {
+  tNVDA: { symbol: "NVDA", name: "Nvidia" },
+  tAAPL: { symbol: "AAPL", name: "Apple" },
+  tSPY: { symbol: "SPY", name: "S&P 500 ETF" },
+  tTSLA: { symbol: "TSLA", name: "Tesla" },
+  tCOST: { symbol: "COST", name: "Costco" },
+} as const satisfies Record<Ticker, { symbol: string; name: string }>;
 
 export const GIFT_AMOUNTS_CENTS = [1000, 2500, 5000] as const;
-export const GROUP_GOAL_MAX_CENTS = 10000;
 
-export const GiftKind = z.enum(["single", "group"]);
-export type GiftKind = z.infer<typeof GiftKind>;
-
-export const GIFT_STATUSES = ["funding", "wrapped", "opened", "claiming", "claimed"] as const;
+export const GIFT_STATUSES = ["wrapped", "opened", "claiming", "claimed"] as const;
 export const GiftStatus = z.enum(GIFT_STATUSES);
 export type GiftStatus = z.infer<typeof GiftStatus>;
 
@@ -55,7 +52,6 @@ export const ERROR_STATUS = {
   forbidden: 403,
   not_found: 404,
   invalid_state: 409,
-  exceeds_remaining: 409,
   too_early: 425,
   rate_limited: 429,
   internal: 500,
@@ -85,14 +81,12 @@ export const CreateGiftRequest = z.strictObject({
 });
 export type CreateGiftRequest = z.infer<typeof CreateGiftRequest>;
 
-/** POST /api/gifts and POST /api/groups */
+/** POST /api/gifts */
 export const CreateGiftResponse = z.strictObject({
   id: Uuid,
   claimToken: ClaimToken,
 });
 export type CreateGiftResponse = z.infer<typeof CreateGiftResponse>;
-export const CreateGroupResponse = CreateGiftResponse;
-export type CreateGroupResponse = CreateGiftResponse;
 
 /** POST /api/gifts/:id/open takes no body. */
 export const OpenGiftRequest = z.strictObject({});
@@ -104,25 +98,6 @@ export type SwapGiftRequest = z.infer<typeof SwapGiftRequest>;
 /** POST /api/gifts/:id/claim */
 export const ClaimGiftRequest = z.strictObject({ wallet: WalletAddress });
 export type ClaimGiftRequest = z.infer<typeof ClaimGiftRequest>;
-
-/** POST /api/groups */
-export const CreateGroupRequest = z.strictObject({
-  organizerName: Name,
-  recipientName: Name,
-  ticker: Ticker,
-  goalCents: Cents.max(GROUP_GOAL_MAX_CENTS),
-  opensAt: IsoDateTime.optional(),
-  note: Note.optional(),
-});
-export type CreateGroupRequest = z.infer<typeof CreateGroupRequest>;
-
-/** POST /api/groups/:id/contributions */
-export const CreateContributionRequest = z.strictObject({
-  name: Name,
-  usdCents: Cents.max(GROUP_GOAL_MAX_CENTS),
-  idempotencyKey: Uuid,
-});
-export type CreateContributionRequest = z.infer<typeof CreateContributionRequest>;
 
 // ---------- public gift state (GET /api/gifts/:id) ----------
 
@@ -156,60 +131,31 @@ const contents = {
   value: GiftValue,
 };
 
-const claiming = {
+export const PublicGiftWrapped = z.strictObject({ ...base, status: z.literal("wrapped") });
+export const PublicGiftOpened = z.strictObject({ ...base, ...contents, status: z.literal("opened") });
+export const PublicGiftClaiming = z.strictObject({
+  ...base,
+  ...contents,
+  status: z.literal("claiming"),
   recipientWallet: WalletAddress,
   claimSignature: TransactionSignature.nullable(),
-};
-
-const claimed = {
+});
+export const PublicGiftClaimed = z.strictObject({
+  ...base,
+  ...contents,
+  status: z.literal("claimed"),
   recipientWallet: WalletAddress,
   claimSignature: TransactionSignature,
   claimedAt: IsoDateTime,
-};
+});
 
-/** Group totals: visible to contributors before opening. Contributor names only. */
-const group = {
-  ticker: Ticker,
-  goalCents: Cents.max(GROUP_GOAL_MAX_CENTS),
-  raisedCents: z.number().int().nonnegative(),
-  contributors: z.array(Name),
-};
-
-const single = { ...base, kind: z.literal("single") };
-const grp = { ...base, kind: z.literal("group"), ...group };
-
-// A single gift has no "funding" state: the treasury funds it at creation.
-export const PublicSingleWrapped = z.strictObject({ ...single, status: z.literal("wrapped") });
-export const PublicSingleOpened = z.strictObject({ ...single, status: z.literal("opened"), ...contents });
-export const PublicSingleClaiming = z.strictObject({ ...single, status: z.literal("claiming"), ...contents, ...claiming });
-export const PublicSingleClaimed = z.strictObject({ ...single, status: z.literal("claimed"), ...contents, ...claimed });
-
-// Groups show ticker, goal and contributors throughout; the amount and note
-// join them at opening. The group page never carries a claim token.
-export const PublicGroupFunding = z.strictObject({ ...grp, status: z.literal("funding") });
-export const PublicGroupWrapped = z.strictObject({ ...grp, status: z.literal("wrapped") });
-const groupContents = (({ ticker: _t, ...rest }) => rest)(contents);
-export const PublicGroupOpened = z.strictObject({ ...grp, status: z.literal("opened"), ...groupContents });
-export const PublicGroupClaiming = z.strictObject({ ...grp, status: z.literal("claiming"), ...groupContents, ...claiming });
-export const PublicGroupClaimed = z.strictObject({ ...grp, status: z.literal("claimed"), ...groupContents, ...claimed });
-
-export const PublicSingleGift = z.discriminatedUnion("status", [
-  PublicSingleWrapped,
-  PublicSingleOpened,
-  PublicSingleClaiming,
-  PublicSingleClaimed,
+export const PublicGift = z.discriminatedUnion("status", [
+  PublicGiftWrapped,
+  PublicGiftOpened,
+  PublicGiftClaiming,
+  PublicGiftClaimed,
 ]);
-export const PublicGroupGift = z.discriminatedUnion("status", [
-  PublicGroupFunding,
-  PublicGroupWrapped,
-  PublicGroupOpened,
-  PublicGroupClaiming,
-  PublicGroupClaimed,
-]);
-export const PublicGift = z.discriminatedUnion("kind", [PublicSingleGift, PublicGroupGift]);
 export type PublicGift = z.infer<typeof PublicGift>;
-export type PublicSingleGift = z.infer<typeof PublicSingleGift>;
-export type PublicGroupGift = z.infer<typeof PublicGroupGift>;
 
 /** GET /api/gifts/:id, POST /open and POST /swap all return the public state. */
 export const GetGiftResponse = PublicGift;
@@ -222,15 +168,3 @@ export const ClaimGiftResponse = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("pending"), signature: TransactionSignature.nullable(), gift: PublicGift }),
 ]);
 export type ClaimGiftResponse = z.infer<typeof ClaimGiftResponse>;
-
-/** POST /api/groups/:id/contributions. A retried idempotency key returns the original contribution. */
-export const CreateContributionResponse = z.strictObject({
-  contribution: z.strictObject({
-    id: Uuid,
-    name: Name,
-    usdCents: Cents,
-    createdAt: IsoDateTime,
-  }),
-  gift: PublicGroupGift,
-});
-export type CreateContributionResponse = z.infer<typeof CreateContributionResponse>;

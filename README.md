@@ -20,7 +20,6 @@ These are mockups. Names, messages and prices are sample content.
 2. **Wrap** it. A gift card appears in the thread with its contents hidden.
 3. **Unwrap** it, then claim the tokens or swap for a different stock first.
 4. **Watch** the same card show the gift's current state and value.
-5. **Chip in** as a group toward one gift, with a shared progress bar.
 
 Stock gift links already exist. Stoked's difference is the conversation: the gift is an object in the thread, where friends can see it change state.
 

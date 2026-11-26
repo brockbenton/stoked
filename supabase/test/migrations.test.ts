@@ -12,12 +12,13 @@ let db: PGlite;
 
 async function insertGift(overrides: Record<string, unknown> = {}) {
   const row = {
-    kind: "single",
     status: "wrapped",
     sender_name: "Alex",
     recipient_name: "Maya",
-    ticker: "NVDA",
+    ticker: "tNVDA",
     usd_cents: 1000,
+    price_cents: 22952,
+    token_raw: "4356918",
     claim_token_hash: "a".repeat(64),
     ...overrides,
   };
@@ -47,7 +48,7 @@ describe("migrations applied in PGlite", () => {
     const res = await db.query<{ table_name: string }>(
       "select table_name from information_schema.tables where table_schema = 'public' order by table_name",
     );
-    expect(res.rows.map((r) => r.table_name)).toEqual(["contributions", "gifts", "prices"]);
+    expect(res.rows.map((r) => r.table_name)).toEqual(["gifts", "prices"]);
   });
 
   it("enables RLS on every table with no policies", async () => {
@@ -55,7 +56,6 @@ describe("migrations applied in PGlite", () => {
       "select relname, relrowsecurity from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname",
     );
     expect(rls.rows).toEqual([
-      { relname: "contributions", relrowsecurity: true },
       { relname: "gifts", relrowsecurity: true },
       { relname: "prices", relrowsecurity: true },
     ]);
@@ -76,7 +76,7 @@ describe("migrations applied in PGlite", () => {
     try {
       const res = await db.query("select * from gifts");
       expect(res.rows).toHaveLength(0);
-      await expect(db.query("insert into prices (ticker, usd_cents, source) values ('NVDA', 1, 'x')")).rejects.toThrow(
+      await expect(db.query("insert into prices (ticker, usd_cents, source) values ('tNVDA', 1, 'x')")).rejects.toThrow(
         /row-level security/,
       );
     } finally {
@@ -88,7 +88,7 @@ describe("migrations applied in PGlite", () => {
 
   it("generates ids and timestamps and stores raw units without loss", async () => {
     const raw = "123456789012345678901234567890123456789"; // 39 digits
-    const id = await insertGift({ status: "opened", price_cents: 22952, token_raw: raw });
+    const id = await insertGift({ status: "opened", token_raw: raw });
     const res = await db.query<{ id: string; token_raw: string; created_at: Date }>(
       "select id, token_raw::text as token_raw, created_at from gifts where id = $1",
       [id],
@@ -98,29 +98,17 @@ describe("migrations applied in PGlite", () => {
     expect(res.rows[0]!.created_at).toBeInstanceOf(Date);
   });
 
-  it("enforces kind, status and positive amounts", async () => {
-    await expect(insertGift({ kind: "pair" })).rejects.toThrow(/check constraint/);
+  it("enforces status, positive amounts and sizing at creation", async () => {
+    await expect(insertGift({ status: "funding" })).rejects.toThrow(/check constraint/);
     await expect(insertGift({ status: "expired" })).rejects.toThrow(/check constraint/);
+    await expect(insertGift({ token_raw: null })).rejects.toThrow(/not-null/);
     await expect(insertGift({ usd_cents: 0 })).rejects.toThrow(/check constraint/);
     await expect(insertGift({ claim_token_hash: null })).rejects.toThrow(/not-null/);
   });
 
-  it("contributions are unique per gift and idempotency key, and reference a gift", async () => {
-    const giftId = await insertGift({ kind: "group", status: "funding", usd_cents: 7500 });
-    const key = "5d3c3a0e-6b8e-4c43-9a51-2f7f1c1f7b10";
-    const insert = (gift: string, k: string) =>
-      db.query("insert into contributions (gift_id, idempotency_key, contributor_name, usd_cents) values ($1, $2, 'Sam', 2500)", [
-        gift,
-        k,
-      ]);
-    await insert(giftId, key);
-    await expect(insert(giftId, key)).rejects.toThrow(/unique/);
-    await expect(insert("00000000-0000-4000-8000-000000000000", key)).rejects.toThrow(/foreign key/);
-  });
-
   it("prices are keyed by ticker", async () => {
-    await db.query("insert into prices (ticker, usd_cents, source) values ('NVDA', 22952, 'demo')");
-    await expect(db.query("insert into prices (ticker, usd_cents, source) values ('NVDA', 1, 'demo')")).rejects.toThrow(
+    await db.query("insert into prices (ticker, usd_cents, source) values ('tNVDA', 22952, 'demo')");
+    await expect(db.query("insert into prices (ticker, usd_cents, source) values ('tNVDA', 1, 'demo')")).rejects.toThrow(
       /duplicate key/,
     );
   });

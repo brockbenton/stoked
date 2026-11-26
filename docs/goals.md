@@ -20,20 +20,20 @@ Each block is a Claude Code [`/goal`](https://code.claude.com/docs/en/goal) cond
 | G4 Wire up and browser test | G2, G3 | `web` | Linux |
 | G5 Devnet and deploy | G4, owner accounts | config, docs | Linux |
 | **1:1 gate** | **G5 passes** | | |
-| G6 Chip-in | gate | group API and UI | Linux |
+| ~~G6 Chip-in~~ | deferred | — | — |
 | G7 Conversation view and price feed | G4 | `web/app/demo`, price job | Linux |
 | G8 Escrow | gate | `programs`, `packages/chain/escrow` | Linux |
 | G9 iMessage | G3, Mac | `ios` | Mac |
 | G10 Submission | all kept work | docs, polish | Linux |
 
-G1 and G2 are parallel. After the gate, G6 and G8 can be too; G7 can start after G4.
+G1 and G2 are parallel. G6 is deferred (see below); G7 can start after G4.
 
 Only the owner can: create accounts, provide keys, merge, deploy to production, choose a license, make the repo public, record and submit.
 
 ## G0: Scaffold and contracts
 
 ```
-/goal Read CLAUDE.md and docs/build-plan.md. Build the pnpm workspace: packages/shared, packages/chain (stub), web (Next.js App Router, TypeScript strict), and supabase/migrations with the planned schema and RLS on. packages/shared exports zod schemas for every API request, response and error in the plan; money and scaled-UI math; and fixture gifts for every status, single and group. Add GitHub Actions CI running the same checks. Done when the transcript shows: `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm build` all exit 0; tests apply the real migration in PGlite; tests cover $10.00 at $229.52 showing 0.0436 shares, multiplier 1.002, rounding down, a scheduled multiplier before and after its timestamp, and that the public schema for a wrapped single gift rejects ticker, amount and note; and `git status` is clean with work committed on branch g0-scaffold. Constraints: no feature UI, no real secrets, no Solana calls, no files under notes/. Stop after 30 turns and report what remains.
+/goal Read CLAUDE.md and docs/build-plan.md. Build the pnpm workspace: packages/shared, packages/chain (stub), web (Next.js App Router, TypeScript strict), and supabase/migrations with the planned schema and RLS on. packages/shared exports zod schemas for every API request, response and error in the plan; money and scaled-UI math; and fixture gifts for every status. Add GitHub Actions CI running the same checks. Done when the transcript shows: `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm build` all exit 0; tests apply the real migration in PGlite; tests cover $10.00 at $229.52 showing 0.0436 shares, multiplier 1.002, rounding down, a scheduled multiplier before and after its timestamp, and that the public schema for a wrapped gift rejects ticker, amount and note; and `git status` is clean with work committed on branch g0-scaffold. Constraints: no feature UI, no real secrets, no Solana calls, no files under notes/. Stop after 30 turns and report what remains.
 ```
 
 ## G1: Chain package
@@ -45,7 +45,7 @@ Only the owner can: create accounts, provide keys, merge, deploy to production, 
 ## G2: Gift UI on fixtures
 
 ```
-/goal Read CLAUDE.md, docs/design.md and look at every PNG in mockups/png. Build the 1:1 web UI in web/ on packages/shared fixtures behind a typed client interface: compose (01), wrapped card (02), closed (03a), unwrap animation, reveal (03b), claimed card (04), and the 1:1 states listed under "States the mockups don't show". Use the copy overrides in docs/design.md. Done when the transcript shows: Playwright screenshots at 390x844 of each screen and state saved under web/test-results, each opened and compared against its mockup with differences fixed or listed; Playwright tests exit 0 covering keyboard use, accessible names, 44px targets, reduced motion and no horizontal scroll at 320px; `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm build` exit 0; and work committed on branch g2-ui. Constraints: don't touch web/app/api or packages/shared; don't build chip-in or voice; don't recreate Apple's Messages chrome. Stop after 35 turns and report what remains.
+/goal Read CLAUDE.md, docs/design.md and look at every PNG in mockups/png. Build the web UI in web/ on packages/shared fixtures behind a typed client interface: compose (01), wrapped card (02), closed (03a), unwrap animation, reveal (03b), claimed card (04), and the 1:1 states listed under "States the mockups don't show". Use the copy overrides in docs/design.md. Done when the transcript shows: Playwright screenshots at 390x844 of each screen and state saved under web/test-results, each opened and compared against its mockup with differences fixed or listed; Playwright tests exit 0 covering keyboard use, accessible names, 44px targets, reduced motion and no horizontal scroll at 320px; `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm build` exit 0; and work committed on branch g2-ui. Constraints: don't touch web/app/api or packages/shared; don't build chip-in or voice; don't recreate Apple's Messages chrome. Stop after 35 turns and report what remains.
 ```
 
 ## G3: API and claim safety
@@ -68,7 +68,9 @@ Owner first: `.env` filled, treasury funded, Vercel linked.
 /goal Read CLAUDE.md and docs/build-plan.md. Get the 1:1 flow working on Solana devnet from a Vercel preview deployment. Run mint setup, apply migrations to the configured Supabase project, seed prices with an honest source label, set preview environment variables without printing values, and deploy a preview. Done when the transcript shows a Playwright smoke run against the preview URL creating, unwrapping and claiming a gift; the confirmed devnet signature looked up by RPC with the expected mint, recipient and raw amount; confirmation that the genesis hash is devnet; RLS checked by an anonymous read returning no rows or a denial; a secret scan of git history finding nothing; and docs/devnet.md listing mint addresses, explorer links and setup steps, committed on branch g5-devnet. Constraints: preview only, no production deploy; before any remote write, list existing tables and stop if unrelated data is present; if an account, key or SOL is missing, name it and stop. Stop after 25 turns and report what remains.
 ```
 
-## G6: Group chip-in
+## G6: Group chip-in (deferred)
+
+Deferred: the hackathon wants significant work built inside the Nov 27–29 window, so nothing here is built beforehand, and the 1:1 flow comes first. G0 removed group fields from the schema and contracts; this goal would add them back in a new migration.
 
 ```
 /goal Read CLAUDE.md, docs/build-plan.md and mockups/png/05-group-chip-in.png. Implement the group API and UI: organizer creates, contributors join from a link with no token, progress updates by polling, the goal moves it to wrapped, and the organizer gets a private recipient link. Label contributions as simulated. Done when the transcript shows: API tests for idempotent retries, 20 concurrent contributions never passing the goal, over-contribution refused, exactly one funding-to-wrapped transition, and a group link being unable to open or claim; an e2e test with an organizer, three contributors and a recipient, ending in an on-chain claim of tCOST; a 390x844 screenshot opened and compared to the mockup; all existing tests, `pnpm lint`, `pnpm typecheck`, `pnpm build` exit 0; and work committed on branch g6-chip-in. Constraints: the 1:1 behavior and tests are unchanged. Stop after 35 turns and report what remains.

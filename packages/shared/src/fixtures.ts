@@ -1,17 +1,17 @@
 /**
- * Fixture gifts in their public (API) shape, one per status for single and
- * group gifts. Prices are demo values, not market data. Wallets and
- * signatures are well-formed placeholders, not real devnet accounts.
+ * Fixture gifts in their public (API) shape, one per status. Prices are demo
+ * values, not market data. Wallets and signatures are well-formed
+ * placeholders, not real devnet accounts.
  */
 import { displayShares, rawToUsdCents, usdToRaw } from "./money";
-import type { GiftValue, PublicGift, PublicGroupGift, PublicSingleGift, Ticker } from "./schemas";
+import type { GiftValue, PublicGift, Ticker } from "./schemas";
 
 export const DEMO_PRICES_CENTS = {
-  NVDA: 22952,
-  AAPL: 27810,
-  SPY: 68240,
-  TSLA: 41275,
-  COST: 91530,
+  tNVDA: 22952,
+  tAAPL: 27810,
+  tSPY: 68240,
+  tTSLA: 41275,
+  tCOST: 91530,
 } as const satisfies Record<Ticker, number>;
 
 export const DEMO_PRICE_SOURCE = "Demo price (not live)";
@@ -40,18 +40,16 @@ export function fixtureValue(ticker: Ticker, usdCents: number, multiplier = "1")
   };
 }
 
-// ---------- single: Alex sends Maya $10 of NVDA ----------
-
-const singleBase = {
-  kind: "single" as const,
+// Alex sends Maya $10 of tNVDA.
+const base = {
   senderName: "Alex",
   recipientName: "Maya",
   opensAt: null,
   createdAt: T0,
 };
-const nvda = fixtureValue("NVDA", 1000);
-const singleContents = {
-  ticker: "NVDA" as const,
+const nvda = fixtureValue("tNVDA", 1000);
+const contents = {
+  ticker: "tNVDA" as const,
   usdCents: 1000,
   note: "Happy birthday! Your first share of something.",
   tokenRaw: nvda.tokenRaw,
@@ -59,96 +57,43 @@ const singleContents = {
   value: nvda.value,
 };
 
-export const singleWrapped: PublicSingleGift = {
-  ...singleBase,
+export const giftWrapped: PublicGift = {
+  ...base,
   id: "00000000-0000-4000-8000-000000000001",
   status: "wrapped",
 };
-export const singleWrappedScheduled: PublicSingleGift = {
-  ...singleBase,
+export const giftWrappedScheduled: PublicGift = {
+  ...base,
   id: "00000000-0000-4000-8000-000000000002",
   status: "wrapped",
   opensAt: "2026-12-25T08:00:00.000Z",
 };
-export const singleOpened: PublicSingleGift = {
-  ...singleBase,
-  ...singleContents,
+export const giftOpened: PublicGift = {
+  ...base,
+  ...contents,
   id: "00000000-0000-4000-8000-000000000003",
   status: "opened",
 };
-export const singleClaiming: PublicSingleGift = {
-  ...singleBase,
-  ...singleContents,
+export const giftClaiming: PublicGift = {
+  ...base,
+  ...contents,
   id: "00000000-0000-4000-8000-000000000004",
   status: "claiming",
   recipientWallet: FIXTURE_WALLET,
   claimSignature: null,
 };
-export const singleClaimed: PublicSingleGift = {
-  ...singleBase,
-  ...singleContents,
+export const giftClaimingSent: PublicGift = {
+  ...base,
+  ...contents,
   id: "00000000-0000-4000-8000-000000000005",
-  status: "claimed",
-  recipientWallet: FIXTURE_WALLET,
-  claimSignature: FIXTURE_SIGNATURE,
-  claimedAt: T_CLAIM,
-};
-
-// ---------- group: three friends chip in toward Costco for Grandma ----------
-
-const groupBase = {
-  kind: "group" as const,
-  senderName: "Jordan",
-  recipientName: "Grandma",
-  opensAt: null,
-  createdAt: T0,
-  ticker: "COST" as const,
-  goalCents: 7500,
-};
-const cost = fixtureValue("COST", 7500);
-const groupFull = { raisedCents: 7500, contributors: ["Jordan", "Sam", "Priya"] };
-const groupContents = {
-  usdCents: 7500,
-  note: "For all the Costco hot dogs. Love, the grandkids.",
-  tokenRaw: cost.tokenRaw,
-  openedAt: T_OPEN,
-  value: cost.value,
-};
-
-export const groupFunding: PublicGroupGift = {
-  ...groupBase,
-  id: "00000000-0000-4000-8000-000000000011",
-  status: "funding",
-  raisedCents: 5000,
-  contributors: ["Jordan", "Sam"],
-};
-export const groupWrapped: PublicGroupGift = {
-  ...groupBase,
-  ...groupFull,
-  id: "00000000-0000-4000-8000-000000000012",
-  status: "wrapped",
-};
-export const groupOpened: PublicGroupGift = {
-  ...groupBase,
-  ...groupFull,
-  ...groupContents,
-  id: "00000000-0000-4000-8000-000000000013",
-  status: "opened",
-};
-export const groupClaiming: PublicGroupGift = {
-  ...groupBase,
-  ...groupFull,
-  ...groupContents,
-  id: "00000000-0000-4000-8000-000000000014",
   status: "claiming",
   recipientWallet: FIXTURE_WALLET,
   claimSignature: FIXTURE_SIGNATURE,
 };
-export const groupClaimed: PublicGroupGift = {
-  ...groupBase,
-  ...groupFull,
-  ...groupContents,
-  id: "00000000-0000-4000-8000-000000000015",
+export const giftClaimed: PublicGift = {
+  ...base,
+  ...contents,
+  id: "00000000-0000-4000-8000-000000000006",
   status: "claimed",
   recipientWallet: FIXTURE_WALLET,
   claimSignature: FIXTURE_SIGNATURE,
@@ -156,23 +101,12 @@ export const groupClaimed: PublicGroupGift = {
 };
 
 export const fixtures = {
-  single: {
-    wrapped: singleWrapped,
-    wrappedScheduled: singleWrappedScheduled,
-    opened: singleOpened,
-    claiming: singleClaiming,
-    claimed: singleClaimed,
-  },
-  group: {
-    funding: groupFunding,
-    wrapped: groupWrapped,
-    opened: groupOpened,
-    claiming: groupClaiming,
-    claimed: groupClaimed,
-  },
+  wrapped: giftWrapped,
+  wrappedScheduled: giftWrappedScheduled,
+  opened: giftOpened,
+  claiming: giftClaiming,
+  claimingSent: giftClaimingSent,
+  claimed: giftClaimed,
 } as const;
 
-export const allFixtures: readonly PublicGift[] = [
-  ...Object.values(fixtures.single),
-  ...Object.values(fixtures.group),
-];
+export const allFixtures: readonly PublicGift[] = Object.values(fixtures);
