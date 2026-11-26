@@ -107,6 +107,7 @@ JSON. Errors: `{ error: { code, message } }`.
 | `POST /api/gifts/:id/open` | token | `wrapped → opened`. 425 `too_early` before `opensAt` (server clock) |
 | `POST /api/gifts/:id/swap` | token | `{ticker}`, only while `opened`; same USD value |
 | `POST /api/gifts/:id/claim` | token | `{wallet}`. 200 claimed, 202 pending |
+| `GET /api/wallets/:address` | — | Test token balances of a wallet: `{wallet, holdings: [{ticker, tokenRaw, multiplier, shares, sharesExact}]}`. Public chain data; only non-zero holdings; rate-limited (60 per minute per client IP) |
 
 `GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening. "Token" is `Authorization: Bearer <claimToken>`. Rate-limit creation, since it draws down the treasury.
 
@@ -132,13 +133,25 @@ The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; thi
 
 Server code: `web/lib/server` (service with injected `GiftStore`, `ChainAdapter`, clock and rate limiter; Supabase store in production, SQL store on PGlite in tests). Creation is rate-limited twice: in memory per client IP (5 per minute, per instance; the IP comes from platform-set headers first), and durably by counting rows in `gifts` (200 per hour across all instances), since each claim to a new wallet also spends treasury SOL on rent. Request bodies are strict (unknown keys → 400 `validation_failed`). RPC failures return 503 `chain_unavailable` with a generic message; details go to the server log only.
 
+A pending claim moves forward only when the claim request is sent again, so the web client repeats it (same wallet) while the gift is `claiming`, including after a reload. `GET` never advances a claim.
+
+### Running locally
+
+`STOKED_LOCAL_DB=1` swaps Supabase for an in-process PGlite database running the real migration (lost on restart). The server refuses it unless `SOLANA_RPC_URL` is a loopback address, and always on Vercel.
+
+| Command | What it runs |
+|---|---|
+| `pnpm test:e2e` | Both browser suites below |
+| `pnpm --filter @stoked/web test:ui` | UI states on fixtures (`NEXT_PUBLIC_STOKED_CLIENT=fixture`, set by the Playwright config) |
+| `pnpm --filter @stoked/web test:flow` | Real API, local database and `solana-test-validator`: send, claim, refresh mid-claim, link preview, token and key leaks |
+
 ### Who can claim
 
 The link carries the token, `/g/:id#t=…`. The fragment stays out of server logs and preview crawlers.
 
 ## Clients
 
-**Web:** `/` compose, `/g/:id` gift, `/w` wallet. Polls state. Open Graph image shows a wrapped card and never the contents. The wallet is a non-extractable Ed25519 WebCrypto key in IndexedDB; clearing browser data loses it, which is acceptable on devnet and stated in the UI.
+**Web:** `/` compose, `/g/:id` gift, `/w` wallet. Polls state every 3 seconds while the tab is visible (15 once claimed). Open Graph image shows a wrapped card and never the contents. The wallet is a non-extractable Ed25519 WebCrypto key in IndexedDB; clearing browser data loses it, which is acceptable on devnet and stated in the UI.
 
 **Conversation view:** `/demo` shows sender and recipient threads side by side using the real components and API, labeled "Prototype thread". Link previews are frozen, so without iOS this is how the live card is demonstrated.
 

@@ -91,6 +91,13 @@ test("04 claimed card", async ({ page }) => {
   await screenshot(page, "04-claimed");
 });
 
+test("wallet", async ({ page }) => {
+  await page.goto("/w");
+  await page.clock.runFor(1000);
+  await expect(page.getByTestId("holding-tNVDA")).toBeVisible();
+  await screenshot(page, "05-wallet");
+});
+
 test.describe("states the mockups don't show", () => {
   test("loading", async ({ page }) => {
     await page.goto(giftUrl(ids.wrapped, { sim: "slow" }));

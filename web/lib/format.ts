@@ -39,6 +39,10 @@ export function explorerTxUrl(signature: string): string {
   return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
 }
 
+export function explorerAddressUrl(address: string): string {
+  return `https://explorer.solana.com/address/${address}?cluster=devnet`;
+}
+
 export function shortAddress(a: string): string {
   return a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a;
 }

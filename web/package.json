@@ -9,7 +9,9 @@
     "start": "next start",
     "typecheck": "next typegen && tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:ui": "playwright test",
+    "test:flow": "tsx ../packages/chain/scripts/with-validator.ts tsx e2e-flow/run.ts",
+    "test:e2e": "pnpm test:ui && pnpm test:flow",
     "test:validator": "tsx ../packages/chain/scripts/with-validator.ts vitest run -c vitest.validator.config.ts --reporter=verbose"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "@stoked/chain": "workspace:*",
     "@stoked/shared": "workspace:*",
     "@supabase/supabase-js": "^2.119.2",
+    "bs58": "^6.0.0",
     "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

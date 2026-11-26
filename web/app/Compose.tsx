@@ -10,10 +10,11 @@ import {
 } from "@stoked/shared";
 import Link from "next/link";
 import { useId, useState, type FormEvent } from "react";
-import { WrappedCard } from "@/components/Cards";
+import { CardMeta, OpenedCard, WrappedCard } from "@/components/Cards";
 import { DevnetLabel } from "@/components/DevnetLabel";
 import { GiftIcon } from "@/components/icons";
 import { GiftClientError, getGiftClient } from "@/lib/client";
+import { useGiftPoll } from "@/lib/client/use-gift-poll";
 import { stockName, stockSymbol } from "@/lib/format";
 
 type Amount = (typeof GIFT_AMOUNTS_CENTS)[number];
@@ -66,7 +67,17 @@ export function Compose() {
     try {
       const client = getGiftClient();
       const { id, claimToken } = await client.createGift(parsed.data);
-      const gift = await client.getGift(id);
+      // The token is returned once, so a failed read must not lose the link.
+      const gift = await client.getGift(id).catch(
+        (): PublicGift => ({
+          id,
+          status: "wrapped",
+          senderName: parsed.data.senderName,
+          recipientName: parsed.data.recipientName,
+          opensAt: parsed.data.opensAt ?? null,
+          createdAt: new Date().toISOString(),
+        }),
+      );
       setSent({ gift, link: `${window.location.origin}/g/${id}#t=${claimToken}` });
     } catch (e) {
       const code = e instanceof GiftClientError ? e.code : "internal";
@@ -226,41 +237,75 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
   const [copied, setCopied] = useState(false);
   const linkId = useId();
   const path = new URL(sent.link).pathname + new URL(sent.link).hash;
+  // The sender's card follows the gift as the recipient opens and claims it.
+  const [gift, setGift] = useState(sent.gift);
+  const [now, setNow] = useState(() => Date.now());
+  useGiftPoll(gift, (g) => {
+    setGift(g);
+    setNow(Date.now());
+  });
+  const name = gift.recipientName;
+  // Once claimed the private link is spent, so stop offering it.
+  const claimed = gift.status === "claimed";
+  const status =
+    gift.status === "opened"
+      ? `${name} opened it and hasn't claimed it yet.`
+      : gift.status === "claiming"
+        ? `It's on its way to ${name}'s wallet.`
+        : gift.status === "claimed"
+          ? `${name} claimed it.`
+          : "";
   return (
     <section className="sent" aria-labelledby="sent-title">
       <h1 id="sent-title" className="sent__title">
         Wrapped for {sent.gift.recipientName}
       </h1>
-      <p className="sent__text">
-        Send {sent.gift.recipientName} this private link. Anyone with it can unwrap the gift, so share it only with them.
-      </p>
-      <WrappedCard gift={sent.gift} viewer="sender" />
-      <div className="field">
-        <label className="label" htmlFor={linkId}>
-          Private gift link
-        </label>
-        <div className="copy">
-          <input id={linkId} className="input copy__input" readOnly value={sent.link} onFocus={(e) => e.target.select()} />
-          <button
-            type="button"
-            className="btn btn--secondary copy__btn"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(sent.link);
-                setCopied(true);
-              } catch {
-                document.getElementById(linkId)?.focus();
-              }
-            }}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
+      {!claimed && (
+        <p className="sent__text">
+          Send {sent.gift.recipientName} this private link. Anyone with it can unwrap the gift, so share it only with them.
+        </p>
+      )}
+      {gift.status === "wrapped" ? (
+        <WrappedCard gift={gift} viewer="sender" />
+      ) : (
+        <div>
+          <OpenedCard gift={gift} now={now} />
+          <CardMeta gift={gift} />
         </div>
-      </div>
-      <Link href={path} className="btn btn--primary">
-        Open it as {sent.gift.recipientName}
-      </Link>
-      <button type="button" className="btn btn--secondary" onClick={onAgain}>
+      )}
+      <p className="sent__status" role="status">
+        {status}
+      </p>
+      {!claimed && (
+        <>
+          <div className="field">
+            <label className="label" htmlFor={linkId}>
+              Private gift link
+            </label>
+            <div className="copy">
+              <input id={linkId} className="input copy__input" readOnly value={sent.link} onFocus={(e) => e.target.select()} />
+              <button
+                type="button"
+                className="btn btn--secondary copy__btn"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(sent.link);
+                    setCopied(true);
+                  } catch {
+                    document.getElementById(linkId)?.focus();
+                  }
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+          <Link href={path} className="btn btn--primary">
+            Open it as {sent.gift.recipientName}
+          </Link>
+        </>
+      )}
+      <button type="button" className={`btn ${claimed ? "btn--primary" : "btn--secondary"}`} onClick={onAgain}>
         Send another
       </button>
       <span role="status" className="sr-only">

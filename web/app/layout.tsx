@@ -7,6 +7,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 const grotesk = Space_Grotesk({ subsets: ["latin"], weight: ["600", "700"], variable: "--font-grotesk", display: "swap" });
 
 export const metadata: Metadata = {
+  // Absolute URLs for link previews. Unset, Next uses the deployment URL.
+  metadataBase: process.env.APP_ORIGIN ? new URL(process.env.APP_ORIGIN) : undefined,
   title: "Stoked",
   description: "Gift a slice of a stock in a conversation. Devnet test tokens only.",
 };

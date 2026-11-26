@@ -452,6 +452,76 @@ a {
   color: var(--ink-muted);
 }
 
+.sent__status:empty {
+  display: none;
+}
+
+.sent__status {
+  font-weight: 600;
+}
+
+.notice__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+  font-weight: 600;
+  color: var(--green-900);
+}
+
+/* ---------- wallet ---------- */
+
+.wallet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wallet .note {
+  margin-top: 0;
+}
+
+.wallet__address {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.wallet__explorer {
+  align-self: flex-start;
+}
+
+.holdings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.holding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.holding__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.holding__amount {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
 .copy {
   display: flex;
   gap: 8px;

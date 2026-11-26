@@ -61,6 +61,7 @@ const screens: Array<{ name: string; go: (page: Page) => Promise<void> }> = [
     go: async (p) => {
       await p.goto(giftUrl(ids.opened));
       await p.clock.runFor(1500);
+      await expect(p.getByRole("heading", { name: "$10.00 of Nvidia" })).toBeVisible();
     },
   },
   {
@@ -68,6 +69,14 @@ const screens: Array<{ name: string; go: (page: Page) => Promise<void> }> = [
     go: async (p) => {
       await p.goto(giftUrl(ids.claimed));
       await p.clock.runFor(1000);
+    },
+  },
+  {
+    name: "wallet",
+    go: async (p) => {
+      await p.goto("/w");
+      await p.clock.runFor(1000);
+      await expect(p.getByTestId("holding-tNVDA")).toBeVisible();
     },
   },
   {

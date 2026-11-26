@@ -1,7 +1,6 @@
 /**
- * The typed client the UI talks to. G2 ships a fixture implementation; G4
- * swaps in one that calls the real /api routes with the same shapes
- * (docs/build-plan.md § API, schemas in @stoked/shared).
+ * The typed client the UI talks to: HTTP over the real /api routes, or
+ * fixtures for UI tests (docs/build-plan.md § API, schemas in @stoked/shared).
  */
 import type {
   ClaimGiftResponse,
@@ -10,9 +9,10 @@ import type {
   ErrorCode,
   PublicGift,
   Ticker,
+  WalletResponse,
 } from "@stoked/shared";
 
-export type ClientErrorCode = ErrorCode | "offline";
+export type ClientErrorCode = ErrorCode | "offline" | "wallet_unavailable";
 
 export class GiftClientError extends Error {
   constructor(
@@ -33,9 +33,14 @@ export interface GiftClient {
   swapGift(id: string, token: string, ticker: Ticker): Promise<PublicGift>;
   /** 200 claimed or 202 pending; retry with the same wallet while pending. */
   claimGift(id: string, token: string, wallet: string): Promise<ClaimGiftResponse>;
+  /** Test token balances for a wallet address. */
+  getWallet(address: string): Promise<WalletResponse>;
 }
 
-/** Where the recipient's wallet address comes from. G4 backs this with a WebCrypto key. */
+/** Where the recipient's wallet address comes from (a WebCrypto key on this device). */
 export interface WalletSource {
+  /** The address, creating the wallet if there isn't one yet. */
   getAddress(): Promise<string>;
+  /** The address if a wallet already exists; never creates one. */
+  peekAddress(): Promise<string | null>;
 }

@@ -285,6 +285,28 @@ export async function getTokenBalance(
   };
 }
 
+/** Raw units `owner` holds of each of our mints, in one RPC call. Mints with no balance are omitted. */
+export async function getRawHoldings(
+  connection: Connection,
+  mints: MintAddresses,
+  owner: PublicKey,
+): Promise<Partial<Record<Ticker, bigint>>> {
+  const { value } = await connection.getParsedTokenAccountsByOwner(
+    owner,
+    { programId: TOKEN_2022_PROGRAM_ID },
+    "confirmed",
+  );
+  const byMint = new Map(TICKERS.map((t) => [mints[t].toBase58(), t]));
+  const holdings: Partial<Record<Ticker, bigint>> = {};
+  for (const { account } of value) {
+    const info = account.data.parsed.info as { mint: string; tokenAmount: { amount: string } };
+    const ticker = byMint.get(info.mint);
+    const raw = BigInt(info.tokenAmount.amount);
+    if (ticker && raw > 0n) holdings[ticker] = (holdings[ticker] ?? 0n) + raw;
+  }
+  return holdings;
+}
+
 export interface UpdateMultiplierOptions {
   connection: Connection;
   treasury: Keypair;

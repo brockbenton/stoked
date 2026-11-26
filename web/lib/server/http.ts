@@ -1,8 +1,9 @@
 import "server-only";
 import { ApiError } from "./errors";
-import { getService } from "./env";
+import { getService, getWalletService } from "./env";
 import type { GiftService } from "./service";
 import { bearerToken } from "./tokens";
+import type { WalletService } from "./wallet";
 
 export function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -47,6 +48,14 @@ export function clientKey(req: Request): string {
 export async function handle(fn: (service: GiftService) => Promise<Response>): Promise<Response> {
   try {
     return await fn(getService());
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+export async function handleWallet(fn: (service: WalletService) => Promise<Response>): Promise<Response> {
+  try {
+    return await fn(getWalletService());
   } catch (err) {
     return errorResponse(err);
   }
