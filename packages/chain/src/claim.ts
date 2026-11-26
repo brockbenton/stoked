@@ -18,6 +18,7 @@ import {
 } from "@solana/spl-token";
 import { PublicKey, Transaction, type Connection, type Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
+import { assertSafeCluster } from "./cluster";
 import { DECIMALS } from "./mints";
 
 export interface SignedClaim {
@@ -46,6 +47,7 @@ export interface BuildClaimTxInput {
 export async function buildClaimTransaction(input: BuildClaimTxInput): Promise<SignedClaim> {
   const { connection, treasury, mint, recipient, raw } = input;
   if (raw <= 0n) throw new RangeError("raw must be positive");
+  await assertSafeCluster(connection);
   if (!PublicKey.isOnCurve(recipient.toBytes())) {
     throw new RangeError("recipient must be a wallet address (on-curve public key)");
   }
@@ -113,18 +115,13 @@ export async function getClaimStatus(
   signature: string,
   lastValidBlockHeight: bigint,
 ): Promise<ClaimStatus> {
-  const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
-  const status = value[0];
-  if (status) {
-    if (status.err) return { state: "failed", reason: JSON.stringify(status.err) };
-    if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
-      return { state: "confirmed" };
-    }
-    return { state: "pending" };
-  }
+  const fromStatuses = await statusFromSignatureStatuses(connection, signature);
+  if (fromStatuses) return fromStatuses;
   const finalizedHeight = BigInt(await connection.getBlockHeight("finalized"));
-  if (finalizedHeight <= lastValidBlockHeight) return { state: "pending" };
-  // Every block that could contain it is finalized: check finalized history once more.
+  // A transaction can land one block past lastValidBlockHeight, and load-balanced
+  // RPC nodes disagree by a few blocks, so wait a margin past it.
+  if (finalizedHeight <= lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS) return { state: "pending" };
+  // Every block that could contain it is finalized: check finalized history.
   const landed = await connection.getTransaction(signature, {
     commitment: "finalized",
     maxSupportedTransactionVersion: 0,
@@ -132,7 +129,25 @@ export async function getClaimStatus(
   if (landed) {
     return landed.meta?.err ? { state: "failed", reason: JSON.stringify(landed.meta.err) } : { state: "confirmed" };
   }
-  return { state: "expired" };
+  // Re-check statuses right before declaring expiry (closes a race with a lagging node).
+  return (await statusFromSignatureStatuses(connection, signature)) ?? { state: "expired" };
+}
+
+/**
+ * Blocks past lastValidBlockHeight before a missing signature counts as expired.
+ * Note: expiry trusts the RPC node's history. Use a node that keeps history for
+ * at least as long as a claim can stay in `claiming` (devnet public RPC does).
+ */
+export const EXPIRY_MARGIN_BLOCKS = 32n;
+
+/** `failed` only at confirmed/finalized: an error on a dropped minority fork is not final. */
+async function statusFromSignatureStatuses(connection: Connection, signature: string): Promise<ClaimStatus | null> {
+  const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+  const status = value[0];
+  if (!status) return null;
+  const settled = status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized";
+  if (!settled) return { state: "pending" };
+  return status.err ? { state: "failed", reason: JSON.stringify(status.err) } : { state: "confirmed" };
 }
 
 /** Poll until the claim is confirmed, failed or expired. */

@@ -7,7 +7,8 @@ import { loadEnv } from "./env";
 
 loadEnv();
 const { connection, treasury } = chainConfigFromEnv();
-console.log(`treasury ${treasury.publicKey.toBase58()} on ${connection.rpcEndpoint}`);
+// Host only: hosted RPC URLs often carry an API key in the path or query.
+console.log(`treasury ${treasury.publicKey.toBase58()} on ${new URL(connection.rpcEndpoint).host}`);
 const results = await setupMints({ connection, treasury });
 for (const r of results) {
   console.log(`${r.ticker}: ${r.actions.length ? r.actions.join(", ") : "already set up"}`);

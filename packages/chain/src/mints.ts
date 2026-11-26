@@ -101,7 +101,7 @@ export interface MintSetupResult {
   ticker: Ticker;
   mint: PublicKey;
   /** Steps performed on this run; empty when everything already existed. */
-  actions: Array<"created-mint" | "initialized-metadata" | "created-treasury-ata" | "minted-supply">;
+  actions: Array<"created-mint" | "created-treasury-ata" | "minted-supply">;
 }
 
 /**
@@ -166,7 +166,13 @@ async function setupMint(
     if (existing.decimals !== DECIMALS) {
       throw new Error(`${ticker}: mint ${mint.toBase58()} has ${existing.decimals} decimals, expected ${DECIMALS}`);
     }
-    needsMetadata = (await getTokenMetadata(connection, mint, "confirmed", TOKEN_2022_PROGRAM_ID)) === null;
+    // Mint creation and metadata go in one atomic transaction, so an existing
+    // mint without metadata wasn't made by this script. Refuse rather than
+    // half-repair it (the realloc would also need a rent top-up).
+    if ((await getTokenMetadata(connection, mint, "confirmed", TOKEN_2022_PROGRAM_ID)) === null) {
+      throw new Error(`${ticker}: mint ${mint.toBase58()} exists without metadata; not created by this script`);
+    }
+    needsMetadata = false;
   }
 
   if (needsMetadata) {
@@ -182,7 +188,6 @@ async function setupMint(
         uri: metadata.uri,
       }),
     );
-    if (info) actions.push("initialized-metadata");
   }
 
   const ata = getAssociatedTokenAddressSync(mint, authority, false, TOKEN_2022_PROGRAM_ID);

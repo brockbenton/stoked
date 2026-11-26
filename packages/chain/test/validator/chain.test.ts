@@ -49,6 +49,15 @@ describe("cluster guard (genesis hash)", () => {
     await expect(
       updateMultiplier({ connection: mainnetLike, treasury, mint: PublicKey.unique(), multiplier: 2 }),
     ).rejects.toThrow(/mainnet/);
+    await expect(
+      buildClaimTransaction({
+        connection: mainnetLike,
+        treasury,
+        mint: PublicKey.unique(),
+        recipient: Keypair.generate().publicKey,
+        raw: 1n,
+      }),
+    ).rejects.toThrow(/mainnet/);
     const chain = createSolanaChain({ connection: mainnetLike, treasury });
     await expect(
       chain.buildClaim({ ticker: "tNVDA", recipientWallet: Keypair.generate().publicKey.toBase58(), raw: 1n }),

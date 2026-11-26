@@ -1,6 +1,7 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 import {
+  EXPIRY_MARGIN_BLOCKS,
   GENESIS_HASHES,
   UnsafeClusterError,
   assertSafeCluster,
@@ -85,33 +86,58 @@ describe("env config", () => {
 describe("claim status", () => {
   const sig = "5".repeat(87);
   type Status = { err: unknown; confirmationStatus?: string } | null;
-  const conn = (status: Status, finalizedHeight: number, landed: unknown = null) =>
-    ({
-      getSignatureStatuses: async () => ({ value: [status] }),
-      getBlockHeight: async () => finalizedHeight,
-      getTransaction: async () => landed,
-    }) as unknown as Parameters<typeof getClaimStatus>[0];
+  const conn = (statuses: Status | Status[], finalizedHeight: number, landed: unknown = null) => {
+    const queue = Array.isArray(statuses) ? [...statuses] : [statuses];
+    return {
+      getSignatureStatuses: async (_s: string[], opts: { searchTransactionHistory?: boolean }) => {
+        expect(opts.searchTransactionHistory).toBe(true);
+        return { value: [queue.length > 1 ? queue.shift() : queue[0]] };
+      },
+      getBlockHeight: async (commitment: string) => {
+        expect(commitment).toBe("finalized");
+        return finalizedHeight;
+      },
+      getTransaction: async (_s: string, opts: { commitment?: string }) => {
+        expect(opts.commitment).toBe("finalized");
+        return landed;
+      },
+    } as unknown as Parameters<typeof getClaimStatus>[0];
+  };
+  const last = 100n;
+  const pastMargin = Number(last + EXPIRY_MARGIN_BLOCKS) + 1;
 
   it("confirmed when the signature is confirmed or finalized", async () => {
-    expect(await getClaimStatus(conn({ err: null, confirmationStatus: "confirmed" }, 0), sig, 100n)).toEqual({
+    expect(await getClaimStatus(conn({ err: null, confirmationStatus: "confirmed" }, 0), sig, last)).toEqual({
       state: "confirmed",
     });
-    expect(await getClaimStatus(conn({ err: null, confirmationStatus: "finalized" }, 0), sig, 100n)).toEqual({
+    expect(await getClaimStatus(conn({ err: null, confirmationStatus: "finalized" }, 0), sig, last)).toEqual({
       state: "confirmed",
     });
   });
-  it("failed when the transaction errored", async () => {
-    const s = await getClaimStatus(conn({ err: { InstructionError: [1, "Custom"] } }, 0), sig, 100n);
-    expect(s.state).toBe("failed");
+  it("failed only when the error is confirmed", async () => {
+    const err = { InstructionError: [1, "Custom"] };
+    expect((await getClaimStatus(conn({ err, confirmationStatus: "confirmed" }, 0), sig, last)).state).toBe("failed");
   });
-  it("pending when unknown and the blockhash may still land", async () => {
-    expect(await getClaimStatus(conn(null, 100), sig, 100n)).toEqual({ state: "pending" });
+  it("pending, not failed, for an error seen only at processed (fork may be dropped)", async () => {
+    const err = { InstructionError: [1, "Custom"] };
+    expect(await getClaimStatus(conn({ err, confirmationStatus: "processed" }, 0), sig, last)).toEqual({
+      state: "pending",
+    });
   });
-  it("expired only past the height with no finalized landing", async () => {
-    expect(await getClaimStatus(conn(null, 101), sig, 100n)).toEqual({ state: "expired" });
-    expect(await getClaimStatus(conn(null, 101, { meta: { err: null } }), sig, 100n)).toEqual({
+  it("pending when unknown and within the expiry margin (it can land at last valid height + 1)", async () => {
+    expect(await getClaimStatus(conn(null, 100), sig, last)).toEqual({ state: "pending" });
+    expect(await getClaimStatus(conn(null, 101), sig, last)).toEqual({ state: "pending" });
+    expect(await getClaimStatus(conn(null, pastMargin - 1), sig, last)).toEqual({ state: "pending" });
+  });
+  it("expired only past the margin with no finalized landing", async () => {
+    expect(await getClaimStatus(conn(null, pastMargin), sig, last)).toEqual({ state: "expired" });
+    expect(await getClaimStatus(conn(null, pastMargin, { meta: { err: null } }), sig, last)).toEqual({
       state: "confirmed",
     });
+  });
+  it("re-checks statuses before declaring expiry", async () => {
+    const statuses: Status[] = [null, { err: null, confirmationStatus: "finalized" }];
+    expect(await getClaimStatus(conn(statuses, pastMargin), sig, last)).toEqual({ state: "confirmed" });
   });
 });
 
