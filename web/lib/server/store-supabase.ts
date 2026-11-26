@@ -36,6 +36,7 @@ export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
             note: g.note,
             opens_at: g.opensAt,
             claim_token_hash: g.claimTokenHash,
+            created_at: g.createdAt,
           })
           .select(COLS),
       );
@@ -70,6 +71,11 @@ export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
           .eq("claim_signature", sig)
           .select(COLS),
       ),
+    async countCreatedSince(since) {
+      const { count, error } = await gifts().select("id", { count: "exact", head: true }).gte("created_at", since);
+      if (error) throw new Error(`database error: ${error.message}`);
+      return count ?? 0;
+    },
     async getPrice(ticker): Promise<PriceRecord | null> {
       const { data, error } = await sb.from("prices").select("usd_cents,source,updated_at").eq("ticker", ticker).limit(1);
       if (error) throw new Error(`database error: ${error.message}`);

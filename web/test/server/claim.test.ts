@@ -193,6 +193,66 @@ describe("claim safety", () => {
     expect(g.chain.transfers).toHaveLength(1);
   });
 
+  it("a transaction that landed with an error moved nothing and is replaced once", async () => {
+    const g = await openedGift();
+    g.chain.landOnSend = false;
+    await g.service.claim(g.id, g.token, { wallet: VALID_WALLET });
+    const first = g.chain.built[0]!.signature;
+    g.chain.landFailed(first);
+    g.chain.landOnSend = true;
+    const r = await g.service.claim(g.id, g.token, { wallet: VALID_WALLET });
+    expect(r.httpStatus).toBe(200);
+    expect(g.chain.built).toHaveLength(2);
+    expect(r.body.signature).not.toBe(first);
+    expect(g.chain.transfers).toHaveLength(1);
+  });
+
+  it("an unknown status (RPC down) past the height is never treated as expired", async () => {
+    const g = await openedGift();
+    g.chain.landOnSend = false;
+    await g.service.claim(g.id, g.token, { wallet: VALID_WALLET });
+    g.chain.advance(10_000);
+    g.chain.statusThrows = true;
+    const r = await g.service.claim(g.id, g.token, { wallet: VALID_WALLET });
+    expect(r.httpStatus).toBe(202);
+    expect(g.chain.built).toHaveLength(1);
+    expect((await row(g, g.id)).claim_signature).toBe(g.chain.built[0]!.signature);
+  });
+
+  it("concurrent first claims to two different wallets bind exactly one wallet", async () => {
+    const g = await openedGift();
+    g.chain.buildJitterMs = 5;
+    const attempts = Array.from({ length: 10 }, (_, i) => (i % 2 ? OTHER_WALLET : VALID_WALLET));
+    const results = await Promise.allSettled(attempts.map((wallet) => g.service.claim(g.id, g.token, { wallet })));
+    const bound = (await row(g, g.id)).recipient_wallet!;
+    expect([VALID_WALLET, OTHER_WALLET]).toContain(bound);
+    results.forEach((r, i) => {
+      if (attempts[i] === bound) expect(r.status).toBe("fulfilled");
+      else expect(r).toMatchObject({ status: "rejected", reason: { code: "invalid_state" } });
+    });
+    expect(g.chain.transfers.map((t) => t.wallet)).toEqual([bound]);
+  });
+
+  it("a request that loses the race after the gift is claimed gets 200 claimed, not 202", async () => {
+    const g = await openedGift();
+    g.chain.landOnSend = false;
+    await g.service.claim(g.id, g.token, { wallet: VALID_WALLET });
+    const sig = g.chain.built[0]!.signature;
+    g.chain.land(sig);
+    // Another request settles it between our read and our markClaimed.
+    const racing: GiftStore = {
+      ...g.store,
+      markClaimed: async (id, s, at) => {
+        await g.store.markClaimed(id, s, at);
+        return null;
+      },
+    };
+    const r = await createGiftService({ ...g.deps, store: racing }).claim(g.id, g.token, { wallet: VALID_WALLET });
+    expect(r.httpStatus).toBe(200);
+    expect(r.body.status).toBe("claimed");
+    expect(r.body.gift.status).toBe("claimed");
+  });
+
   it("a send failure leaves the stored transaction to be retried, not doubled", async () => {
     const g = await openedGift();
     let fails = 1;

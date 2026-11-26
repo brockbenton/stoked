@@ -13,6 +13,7 @@ import { POST as swapPOST } from "../../app/api/gifts/[id]/swap/route";
 import { POST as createPOST } from "../../app/api/gifts/route";
 import { setServiceForTests } from "../../lib/server/env";
 import { createRateLimiter } from "../../lib/server/rate-limit";
+import { createGiftService } from "../../lib/server/service";
 import { NOW, OTHER_WALLET, VALID_WALLET, giftReq, setup } from "./harness";
 
 type Ctx = Awaited<ReturnType<typeof setup>>;
@@ -167,8 +168,9 @@ describe("too_early", () => {
   it("uses the server clock, not anything the client sends", async () => {
     const opensAt = new Date(NOW.getTime() + 3600_000).toISOString();
     const { id, claimToken } = await create({ opensAt });
+    // A client-sent Date header claiming it's later changes nothing.
     const early = await call(
-      openPOST(req({ now: opensAt }, claimToken, { date: new Date(NOW.getTime() + 7200_000).toUTCString() }), params(id)),
+      openPOST(req(undefined, claimToken, { date: new Date(NOW.getTime() + 7200_000).toUTCString() }), params(id)),
     );
     expectError(early, 425, "too_early");
     expect(await dbStatus(id)).toBe("wrapped");
@@ -231,6 +233,7 @@ describe("request handling", () => {
   });
 
   it("rate-limits creation per client", async () => {
+    await ctx.db.close();
     ctx = await setup({ rateLimiter: createRateLimiter({ perKey: 2, global: 100, windowMs: 60_000 }) });
     setServiceForTests(ctx.service);
     const ip = { "x-forwarded-for": "203.0.113.7" };
@@ -238,6 +241,43 @@ describe("request handling", () => {
     expect((await call(createPOST(req(giftReq(), null, ip)))).status).toBe(200);
     expectError(await call(createPOST(req(giftReq(), null, ip))), 429, "rate_limited");
     expect((await call(createPOST(req(giftReq(), null, { "x-forwarded-for": "198.51.100.1" })))).status).toBe(200);
+  });
+
+  it("request bodies are strict: unknown keys are 400 validation_failed", async () => {
+    const { id, claimToken } = await create();
+    expectError(await call(openPOST(req({ now: "2030-01-01T00:00:00Z" }, claimToken), params(id))), 400, "validation_failed");
+    await open(id, claimToken);
+    expectError(await call(swapPOST(req({ ticker: "tAAPL", x: 1 }, claimToken), params(id))), 400, "validation_failed");
+    expectError(await call(claimPOST(req({ wallet: VALID_WALLET, extra: 1 }, claimToken), params(id))), 400, "validation_failed");
+    expect(await dbStatus(id)).toBe("opened");
+  });
+
+  it("caps creation durably across limiter instances (counted in the database)", async () => {
+    await ctx.db.close();
+    ctx = await setup({ creationCap: { max: 2, windowMs: 3_600_000 } });
+    setServiceForTests(ctx.service);
+    await create();
+    // A second service on the same database (another instance, fresh in-memory limiter).
+    setServiceForTests(createGiftService({ ...ctx.deps, rateLimiter: createRateLimiter({ perKey: 9, global: 9, windowMs: 1 }) }));
+    await create();
+    expectError(await call(createPOST(req(giftReq()))), 429, "rate_limited");
+    ctx.clock.set(new Date(NOW.getTime() + 3_600_001)); // window passes
+    expect((await call(createPOST(req(giftReq())))).status).toBe(200);
+  });
+
+  it("RPC failures are 503 with a generic message, and never break reads of a settled gift", async () => {
+    const { id, claimToken } = await create();
+    await open(id, claimToken);
+    await claim(id, claimToken);
+    ctx.chain.multiplierSchedule = async () => {
+      throw new Error("fetch failed: https://rpc.example/?api-key=zq9marker");
+    };
+    const r = await get(id);
+    expect(r.status).toBe(200);
+    expect(PublicGift.parse(r.body).status).toBe("claimed");
+    const c = await call(createPOST(req(giftReq())));
+    expectError(c, 503, "chain_unavailable");
+    expect(JSON.stringify(c.body)).not.toContain("zq9marker");
   });
 
   it("a claim for a claimed gift by its wallet is 200 again; another wallet is 409", async () => {

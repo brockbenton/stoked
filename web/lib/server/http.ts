@@ -8,23 +8,14 @@ export function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
 }
 
-interface ZodLikeError {
-  name: "ZodError";
-  issues: { path: PropertyKey[]; message: string }[];
-}
-
-function isZodError(err: unknown): err is ZodLikeError {
-  return err instanceof Error && err.name === "ZodError" && Array.isArray((err as { issues?: unknown }).issues);
-}
-
+/**
+ * Request validation is turned into ApiError("validation_failed") inside the
+ * service, so anything else that throws (including a ZodError from checking
+ * our own output) is a server fault: 500 with no internals echoed.
+ */
 export function errorResponse(err: unknown): Response {
   if (err instanceof ApiError) return json({ error: { code: err.code, message: err.message } }, err.status);
-  if (isZodError(err)) {
-    const message = err.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ");
-    return json({ error: { code: "validation_failed", message: message || "Invalid request" } }, 400);
-  }
-  // Never echo internals (could include keys or connection strings).
-  console.error("api error:", err instanceof Error ? err.name : typeof err);
+  console.error("[stoked] api error:", err instanceof Error ? err.name : typeof err);
   return json({ error: { code: "internal", message: "Something went wrong" } }, 500);
 }
 
@@ -40,9 +31,16 @@ export async function readJson(req: Request): Promise<unknown> {
 
 export const tokenOf = (req: Request) => bearerToken(req.headers.get("authorization"));
 
+/**
+ * Client IP for the per-client limiter. Prefers headers the platform sets
+ * (Vercel overwrites x-vercel-forwarded-for / x-real-ip); the leftmost
+ * x-forwarded-for entry is client-controlled behind appending proxies, so it
+ * is the last resort. The durable global cap backs this up either way.
+ */
 export function clientKey(req: Request): string {
-  const fwd = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return fwd || req.headers.get("x-real-ip") || "unknown";
+  const h = req.headers;
+  const first = (v: string | null) => v?.split(",")[0]?.trim() || null;
+  return first(h.get("x-vercel-forwarded-for")) ?? first(h.get("x-real-ip")) ?? first(h.get("x-forwarded-for")) ?? "unknown";
 }
 
 /** Run a handler against the service, mapping errors to `{ error: { code, message } }`. */

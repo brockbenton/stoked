@@ -17,6 +17,7 @@ import {
   CreateGiftRequest,
   DEMO_PRICES_CENTS,
   DEMO_PRICE_SOURCE,
+  OpenGiftRequest,
   PublicGift,
   SwapGiftRequest,
   WalletAddress,
@@ -28,6 +29,7 @@ import {
   type ClaimGiftResponse,
   type CreateGiftResponse,
   type GiftValue,
+  type MultiplierSchedule,
   type Ratio,
   type Ticker,
 } from "@stoked/shared";
@@ -46,6 +48,28 @@ export interface ServiceDeps {
   confirmPolls?: number;
   confirmIntervalMs?: number;
   newToken?: () => string;
+  /** Durable cap on gifts created per window, counted in the database. */
+  creationCap?: { max: number; windowMs: number };
+}
+
+interface RequestSchema<T> {
+  safeParse(
+    v: unknown,
+  ): { success: true; data: T } | { success: false; error: { issues: { path: PropertyKey[]; message: string }[] } };
+}
+
+/** Request validation: a ZodError here is the client's fault (400); anywhere else it is ours (500). */
+function parseRequest<T>(schema: RequestSchema<T>, body: unknown): T {
+  const r = schema.safeParse(body);
+  if (r.success) return r.data;
+  const message = r.error.issues.map((i) => `${i.path.map(String).join(".") || "body"}: ${i.message}`).join("; ");
+  throw new ApiError("validation_failed", message || "Invalid request");
+}
+
+/** Server-side log of a failure by name and message only (no objects that could carry config). */
+function logError(what: string, err: unknown): void {
+  const e = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  console.error(`[stoked] ${what} failed: ${e.slice(0, 500)}`);
 }
 
 export interface ClaimResult {
@@ -83,6 +107,7 @@ export function createGiftService(deps: ServiceDeps) {
   const confirmPolls = deps.confirmPolls ?? 8;
   const confirmIntervalMs = deps.confirmIntervalMs ?? 500;
   const newToken = deps.newToken ?? newClaimToken;
+  const creationCap = deps.creationCap ?? { max: 200, windowMs: 3_600_000 };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   async function price(ticker: Ticker) {
@@ -90,18 +115,36 @@ export function createGiftService(deps: ServiceDeps) {
     return p ?? { usdCents: DEMO_PRICES_CENTS[ticker], source: DEMO_PRICE_SOURCE, updatedAt: now().toISOString() };
   }
 
-  /** Multiplier in force now, read from the mint. */
+  const lastSchedule = new Map<Ticker, MultiplierSchedule>();
+  const nowSeconds = () => Math.floor(now().getTime() / 1000);
+
+  /** Multiplier in force now, read from the mint. Sizing (create, swap) must use a fresh read. */
   async function multiplier(ticker: Ticker): Promise<Ratio> {
     try {
       const schedule = await chain.multiplierSchedule(ticker);
-      return effectiveMultiplier(schedule, Math.floor(now().getTime() / 1000));
+      lastSchedule.set(ticker, schedule);
+      return effectiveMultiplier(schedule, nowSeconds());
     } catch (err) {
-      throw new ApiError("chain_unavailable", `Couldn't read the ${ticker} mint: ${(err as Error).message}`);
+      logError(`multiplier read for ${ticker}`, err);
+      throw new ApiError("chain_unavailable", "Couldn't reach Solana; try again shortly");
+    }
+  }
+
+  /**
+   * For display only: falls back to the last schedule read (or 1.0 before any
+   * read) so a state change that already happened is never reported as failed
+   * because the RPC hiccuped while formatting the response.
+   */
+  async function displayMultiplier(ticker: Ticker): Promise<Ratio> {
+    try {
+      return await multiplier(ticker);
+    } catch {
+      return effectiveMultiplier(lastSchedule.get(ticker) ?? { multiplier: 1 }, nowSeconds());
     }
   }
 
   async function value(g: GiftRecord): Promise<GiftValue> {
-    const [p, m] = await Promise.all([price(g.ticker), multiplier(g.ticker)]);
+    const [p, m] = await Promise.all([price(g.ticker), displayMultiplier(g.ticker)]);
     const raw = BigInt(g.tokenRaw);
     return {
       priceCents: p.usdCents,
@@ -172,6 +215,11 @@ export function createGiftService(deps: ServiceDeps) {
     return g;
   }
 
+  /** The response for whatever state the gift is in now. */
+  async function respond(g: GiftRecord): Promise<ClaimResult> {
+    return g.status === "claimed" ? claimed(g) : pending(g);
+  }
+
   async function claimed(g: GiftRecord): Promise<ClaimResult> {
     const gift = await toPublic(g);
     return { httpStatus: 200, body: { status: "claimed", signature: g.claimSignature!, gift } };
@@ -185,8 +233,7 @@ export function createGiftService(deps: ServiceDeps) {
   /** Step 4 for a stored signature: mark claimed once confirmed. */
   async function settleConfirmed(g: GiftRecord): Promise<ClaimResult> {
     const done = await store.markClaimed(g.id, g.claimSignature!, now().toISOString());
-    const cur = done ?? (await reload(g.id));
-    return cur.status === "claimed" ? claimed(cur) : pending(cur);
+    return respond(done ?? (await reload(g.id)));
   }
 
   /** Steps 2–4: build, store (CAS against `expected`), send, briefly wait for confirmation. */
@@ -195,17 +242,21 @@ export function createGiftService(deps: ServiceDeps) {
     try {
       signed = await chain.buildClaim({ ticker: g.ticker, recipientWallet: g.recipientWallet!, raw: BigInt(g.tokenRaw) });
     } catch (err) {
-      throw new ApiError("chain_unavailable", `Couldn't prepare the transfer: ${(err as Error).message}`);
+      logError("build claim", err);
+      throw new ApiError("chain_unavailable", "Couldn't reach Solana to prepare the transfer; try again shortly");
     }
     const stored = await store.setClaimTx(g.id, expected, signed.signature, signed.lastValidBlockHeight);
     if (!stored) {
       // Another request stored a transaction first; ours is discarded unsent.
-      return pending(await reload(g.id));
+      return respond(await reload(g.id));
     }
     try {
       await chain.sendClaim(signed);
-    } catch {
-      // Stored and retryable: a later call sees it pending, then expired, and replaces it.
+    } catch (err) {
+      // Stored and retryable: a later call sees it pending, then expired, and
+      // replaces it. Logged, because a deterministic failure (e.g. an empty
+      // treasury) otherwise looks like a claim that is pending forever.
+      logError(`send claim for gift ${g.id}`, err);
       return pending(stored);
     }
     for (let i = 0; i < confirmPolls; i++) {
@@ -220,7 +271,9 @@ export function createGiftService(deps: ServiceDeps) {
   async function statusOf(g: GiftRecord): Promise<ClaimStatus> {
     try {
       return await chain.claimStatus(g.claimSignature!, g.claimLastValidHeight!);
-    } catch {
+    } catch (err) {
+      // Unknown is never treated as expired: replacing a transaction that might still land could pay twice.
+      logError("claim status", err);
       return { state: "pending" };
     }
   }
@@ -243,11 +296,16 @@ export function createGiftService(deps: ServiceDeps) {
 
   return {
     async create(body: unknown, clientKey: string): Promise<CreateGiftResponse> {
-      const req = CreateGiftRequest.parse(body);
+      const req = parseRequest(CreateGiftRequest, body);
       if (req.opensAt && Date.parse(req.opensAt) <= now().getTime()) {
         throw new ApiError("validation_failed", "opensAt must be in the future");
       }
       if (!rateLimiter.take(clientKey)) throw new ApiError("rate_limited", "Too many gifts; try again in a minute");
+      // Durable cap across instances and cold starts (the in-memory limiter is per instance).
+      const since = new Date(now().getTime() - creationCap.windowMs).toISOString();
+      if ((await store.countCreatedSince(since)) >= creationCap.max) {
+        throw new ApiError("rate_limited", "The demo has hit its gift limit for now; try again later");
+      }
       const p = await price(req.ticker);
       const m = await multiplier(req.ticker);
       const raw = usdToRaw(req.usdCents, p.usdCents, m);
@@ -262,6 +320,7 @@ export function createGiftService(deps: ServiceDeps) {
         note: req.note ?? null,
         opensAt: req.opensAt ? new Date(req.opensAt).toISOString() : null,
         claimTokenHash: hashToken(token),
+        createdAt: now().toISOString(),
       });
       return { id: g.id, claimToken: token };
     },
@@ -270,7 +329,8 @@ export function createGiftService(deps: ServiceDeps) {
       return toPublic(await load(id));
     },
 
-    async open(id: string, token: string | null): Promise<PublicGift> {
+    async open(id: string, token: string | null, body: unknown = {}): Promise<PublicGift> {
+      parseRequest(OpenGiftRequest, body);
       const g = await authed(id, token);
       if (g.status !== "wrapped") throw invalidState(`Can't open a gift that is ${g.status}`);
       if (g.opensAt && Date.parse(g.opensAt) > now().getTime()) {
@@ -282,7 +342,7 @@ export function createGiftService(deps: ServiceDeps) {
     },
 
     async swap(id: string, token: string | null, body: unknown): Promise<PublicGift> {
-      const { ticker } = SwapGiftRequest.parse(body);
+      const { ticker } = parseRequest(SwapGiftRequest, body);
       const g = await authed(id, token);
       if (g.status !== "opened") throw invalidState(`Can't swap a gift that is ${g.status}`);
       const p = await price(ticker);
@@ -294,14 +354,13 @@ export function createGiftService(deps: ServiceDeps) {
     },
 
     async claim(id: string, token: string | null, body: unknown): Promise<ClaimResult> {
+      // Strict shape first ({wallet} and nothing else), then the wallet value itself.
+      const onlyWallet =
+        body !== null && typeof body === "object" && !Array.isArray(body) && Object.keys(body).join() === "wallet";
+      if (!onlyWallet) throw new ApiError("validation_failed", "Body must be {wallet}");
       const parsed = ClaimGiftRequest.safeParse(body);
-      const wallet = parsed.success ? parsed.data.wallet : (body as { wallet?: unknown } | null)?.wallet;
-      if (!isValidWallet(wallet)) {
-        if (!parsed.success && (body == null || typeof body !== "object" || !("wallet" in body))) {
-          throw new ApiError("validation_failed", "Body must be {wallet}");
-        }
-        throw new ApiError("invalid_wallet", "That isn't a Solana wallet address");
-      }
+      const wallet = parsed.success ? parsed.data.wallet : undefined;
+      if (!isValidWallet(wallet)) throw new ApiError("invalid_wallet", "That isn't a Solana wallet address");
       let g = await authed(id, token);
       if (g.status === "wrapped") throw invalidState("Open the gift before claiming it");
       if (g.status === "opened") {

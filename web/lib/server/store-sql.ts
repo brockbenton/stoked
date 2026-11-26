@@ -48,9 +48,9 @@ export function createSqlGiftStore(db: SqlClient): GiftStore {
   return {
     async insert(g: NewGift) {
       const r = await one(
-        `insert into gifts (status, sender_name, recipient_name, ticker, usd_cents, price_cents, token_raw, note, opens_at, claim_token_hash)
-         values ('wrapped', $1, $2, $3, $4, $5, $6::numeric, $7, $8, $9) returning ${COLS}`,
-        [g.senderName, g.recipientName, g.ticker, g.usdCents, g.priceCents, g.tokenRaw, g.note, g.opensAt, g.claimTokenHash],
+        `insert into gifts (status, sender_name, recipient_name, ticker, usd_cents, price_cents, token_raw, note, opens_at, claim_token_hash, created_at)
+         values ('wrapped', $1, $2, $3, $4, $5, $6::numeric, $7, $8, $9, $10) returning ${COLS}`,
+        [g.senderName, g.recipientName, g.ticker, g.usdCents, g.priceCents, g.tokenRaw, g.note, g.opensAt, g.claimTokenHash, g.createdAt],
       );
       if (!r) throw new Error("insert returned no row");
       return r;
@@ -82,6 +82,10 @@ export function createSqlGiftStore(db: SqlClient): GiftStore {
          where id = $1 and status = 'claiming' and claim_signature = $2 returning ${COLS}`,
         [id, sig, at],
       ),
+    async countCreatedSince(since) {
+      const { rows } = await db.query<{ n: string }>(`select count(*)::text as n from gifts where created_at >= $1`, [since]);
+      return Number(rows[0]?.n ?? 0);
+    },
     async getPrice(ticker): Promise<PriceRecord | null> {
       const { rows } = await db.query<Row>(`select usd_cents, source, updated_at from prices where ticker = $1`, [ticker]);
       const r = rows[0];

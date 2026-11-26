@@ -36,6 +36,8 @@ export interface NewGift {
   note: string | null;
   opensAt: string | null;
   claimTokenHash: string;
+  /** Server clock, so the durable creation cap and createdAt agree. */
+  createdAt: string;
 }
 
 export interface PriceRecord {
@@ -62,4 +64,6 @@ export interface GiftStore {
   /** claiming → claimed, only for the stored signature. */
   markClaimed(id: string, signature: string, at: string): Promise<GiftRecord | null>;
   getPrice(ticker: Ticker): Promise<PriceRecord | null>;
+  /** Gifts created at or after `since` (ISO), for the durable creation cap. */
+  countCreatedSince(since: string): Promise<number>;
 }

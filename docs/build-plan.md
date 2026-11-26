@@ -130,7 +130,7 @@ The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; thi
 4. Send and confirm, then set `claimed`.
 5. On retry while `claiming`: look up the stored signature. Confirmed → `claimed`. Unknown and not past the height → 202. Past the height, after a finalized history lookup shows no landing → one caller may replace the signature by compare-and-swap. A transaction that landed with an error (seen at `confirmed` or later) moved nothing and is replaced the same way. The wallet stays fixed, and a claim naming a different wallet gets 409 `invalid_state`.
 
-Server code: `web/lib/server` (service with injected `GiftStore`, `ChainAdapter`, clock and rate limiter; Supabase store in production, SQL store on PGlite in tests). Creation is rate-limited in memory per client IP and globally (5 per IP and 100 total per minute, per instance).
+Server code: `web/lib/server` (service with injected `GiftStore`, `ChainAdapter`, clock and rate limiter; Supabase store in production, SQL store on PGlite in tests). Creation is rate-limited twice: in memory per client IP (5 per minute, per instance; the IP comes from platform-set headers first), and durably by counting rows in `gifts` (200 per hour across all instances), since each claim to a new wallet also spends treasury SOL on rent. Request bodies are strict (unknown keys → 400 `validation_failed`). RPC failures return 503 `chain_unavailable` with a generic message; details go to the server log only.
 
 ### Who can claim
 

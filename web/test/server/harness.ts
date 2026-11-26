@@ -81,7 +81,19 @@ export class FakeChain implements ChainAdapter {
     return true;
   }
 
+  /** Signatures that landed with an error (fee paid, nothing transferred). */
+  failedTx = new Set<string>();
+  /** Make status lookups throw (RPC down). */
+  statusThrows = false;
+
+  /** Land a transaction as failed: it executed with an error, so no tokens moved. */
+  landFailed(signature: string) {
+    this.failedTx.add(signature);
+  }
+
   async claimStatus(signature: string, lastValidBlockHeight: bigint): Promise<ClaimStatus> {
+    if (this.statusThrows) throw new Error("RPC unavailable");
+    if (this.failedTx.has(signature)) return { state: "failed", reason: "InstructionError" };
     if (this.landed.has(signature)) return { state: "confirmed" };
     return this.height > lastValidBlockHeight ? { state: "expired" } : { state: "pending" };
   }
