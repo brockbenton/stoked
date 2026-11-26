@@ -10,18 +10,27 @@ export function Sheet({
   onClose,
   children,
   labelledBy,
+  returnFocusTo,
 }: {
   fromName: string;
   onClose: () => void;
   children: ReactNode;
   labelledBy: string;
+  /** Element ids to try, in order, on close if the opener is gone. */
+  returnFocusTo?: string[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Keep the latest callbacks without re-running the mount effect (which would steal focus).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const fallbackRef = useRef(returnFocusTo);
+  fallbackRef.current = returnFocusTo;
+
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab" && ref.current) {
         const items = ref.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), a[href], input:not([disabled]), textarea, [tabindex="0"]',
@@ -41,9 +50,15 @@ export function Sheet({
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
-      prev?.focus?.();
+      // The opener may be gone (the wrapped card becomes the opened card); fall back.
+      // Passive-effect cleanup runs after the commit, so the fallback is already in the DOM.
+      if (prev && prev !== document.body && prev.isConnected) return prev.focus();
+      for (const fid of fallbackRef.current ?? []) {
+        const el = document.getElementById(fid);
+        if (el) return el.focus();
+      }
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="scrim">
@@ -54,7 +69,7 @@ export function Sheet({
             {initials(fromName)}
           </span>
           <span className="sheet__from">From {fromName}</span>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+          <button type="button" className="icon-btn" onClick={() => onCloseRef.current()} aria-label="Close">
             <CloseIcon />
           </button>
         </div>

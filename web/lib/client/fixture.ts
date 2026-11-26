@@ -15,7 +15,13 @@ import {
 } from "@stoked/shared";
 import { GiftClientError, type GiftClient, type WalletSource } from "./types";
 
-export type Sim = "claim-fail" | "offline" | "slow" | "claim-stuck";
+/**
+ * claim-fail: claim is rejected and nothing changes. claim-moved: the claim
+ * request errors *after* the server moved the gift to claiming (e.g. a
+ * timeout). swap-fail: swap errors. claim-stuck: a pending claim never lands.
+ */
+export type Sim = "claim-fail" | "claim-moved" | "swap-fail" | "offline" | "slow" | "claim-stuck";
+const ALL_SIMS: Sim[] = ["claim-fail", "claim-moved", "swap-fail", "offline", "slow", "claim-stuck"];
 
 export interface FixtureClientOptions {
   sim?: ReadonlySet<Sim>;
@@ -149,6 +155,7 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
         const e = entry(id);
         const g = e.gift;
         if (g.status !== "opened") throw new GiftClientError("invalid_state", "Only an opened gift can be swapped");
+        if (sim.has("swap-fail")) throw new GiftClientError("internal", "Swap failed");
         const { tokenRaw, value } = fixtureValue(ticker, g.usdCents);
         e.secret = { ...e.secret, ticker };
         e.gift = { ...g, ticker, tokenRaw, value };
@@ -165,6 +172,7 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
         }
         if (g.status === "opened") {
           e.gift = { ...g, status: "claiming", recipientWallet: wallet, claimSignature: FIXTURE_SIGNATURE };
+          if (sim.has("claim-moved")) throw new GiftClientError("internal", "Timed out after starting the claim");
           return { status: "pending", signature: FIXTURE_SIGNATURE, gift: e.gift };
         }
         if (g.status === "claiming") {
@@ -184,7 +192,6 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
 export const fixtureWallet: WalletSource = { getAddress: async () => FIXTURE_WALLET };
 
 export function parseSim(search: string): Set<Sim> {
-  const all: Sim[] = ["claim-fail", "offline", "slow", "claim-stuck"];
   const values = new URLSearchParams(search).getAll("sim").flatMap((v) => v.split(","));
-  return new Set(all.filter((s) => values.includes(s)));
+  return new Set(ALL_SIMS.filter((s) => values.includes(s)));
 }

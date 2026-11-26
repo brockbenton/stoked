@@ -159,10 +159,14 @@ test("keyboard: unwrap and claim without a pointer, focus stays in the sheet", a
   await page.keyboard.press("Enter");
   await page.clock.runFor(2000);
   const claim = page.getByRole("button", { name: "Claim to my wallet" });
-  await claim.focus();
+  for (let i = 0; i < 8 && !(await claim.evaluate((el) => el === document.activeElement)); i++) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(claim).toBeFocused();
   await page.keyboard.press("Enter");
   await page.clock.runFor(6000);
   await expect(page.getByText("Claimed.")).toBeVisible();
+  await expect(page.locator("#gift-notice")).toBeFocused();
 });
 
 test("keyboard: Escape closes the sheet and returns focus to the card", async ({ page }) => {

@@ -50,14 +50,21 @@ export function GiftScreen({ id }: { id: string }) {
   const gift = load.k === "ready" ? load.gift : null;
   const setGift = (g: PublicGift) => setLoad({ k: "ready", gift: g });
 
+  const unwrapping = useRef(false);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
   const fetchGift = useCallback(async () => {
     setLoad({ k: "loading" });
+    // Read the token here: state from the mount effect isn't set yet on first load.
+    const hasToken = readTokenFromHash(window.location.hash).length > 0;
     try {
       const g = await getGiftClient().getGift(id);
       setLoad({ k: "ready", gift: g });
       setNow(Date.now());
-      if (g.status === "opened") setSheet("reveal");
-      if (g.status === "claiming") {
+      // Only the recipient (link with a token) gets the reveal and claim sheet.
+      if (hasToken && g.status === "opened") setSheet("reveal");
+      if (hasToken && g.status === "claiming") {
         setSheet("reveal");
         setClaim({ k: "pending", stuck: false });
       }
@@ -67,10 +74,16 @@ export function GiftScreen({ id }: { id: string }) {
     }
   }, [id]);
 
+  const closeSheet = useCallback(() => setSheet(null), []);
+
   useEffect(() => {
     setToken(readTokenFromHash(window.location.hash));
     setOffline(!navigator.onLine);
-    const on = () => setOffline(false);
+    const on = () => {
+      setOffline(false);
+      // Reload if the page couldn't load while offline.
+      if (loadRef.current.k === "error") void fetchGift();
+    };
     const off = () => setOffline(true);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
@@ -118,11 +131,16 @@ export function GiftScreen({ id }: { id: string }) {
   }, [claim, id, finishClaim]);
 
   async function unwrap() {
-    if (!gift || gift.status !== "wrapped") return;
-    if (gift.opensAt && Date.parse(gift.opensAt) > Date.now()) {
+    // One open at a time: the box stays clickable (aria-disabled) during the animation.
+    if (!gift || gift.status !== "wrapped" || unwrapping.current) return;
+    // The server clock decides (425 too_early); the local clock only short-circuits
+    // when it's clearly early, and a locked box is re-checked on every tap.
+    if (gift.opensAt && Date.parse(gift.opensAt) > Date.now() + 60_000) {
       setTooEarly(true);
       return;
     }
+    unwrapping.current = true;
+    setTooEarly(false);
     setOpenError(null);
     setSheet("unwrapping");
     const minDelay = sleep(reducedMotion() ? REDUCED_MS : UNWRAP_MS);
@@ -139,13 +157,17 @@ export function GiftScreen({ id }: { id: string }) {
       if (code === "too_early") setTooEarly(true);
       else if (code === "invalid_state") void fetchGift();
       else setOpenError(code === "offline" ? "You're offline. Connect and tap the box again." : "Couldn't unwrap it. Try again.");
+    } finally {
+      unwrapping.current = false;
     }
   }
 
   async function doClaim() {
+    if (claim.k === "sending") return;
     setClaim({ k: "sending" });
     try {
-      const wallet = await getWallet().getAddress();
+      // A claim in progress is bound to its wallet; retries must reuse it.
+      const wallet = gift?.status === "claiming" ? gift.recipientWallet : await getWallet().getAddress();
       const res = await getGiftClient().claimGift(id, token, wallet);
       if (res.status === "claimed") finishClaim(res.gift);
       else {
@@ -154,12 +176,32 @@ export function GiftScreen({ id }: { id: string }) {
       }
     } catch (e) {
       const code = codeOf(e);
+      if (code === "validation_failed" || code === "invalid_wallet" || code === "unauthorized" || code === "forbidden") {
+        setClaim({
+          k: "failed",
+          message:
+            code === "unauthorized" || code === "forbidden"
+              ? "This link can't claim the gift. Open the private link you were sent."
+              : "That wallet address wasn't accepted. Nothing was sent.",
+        });
+        return;
+      }
+      // Anything else (timeout, offline, 409, 5xx) may have happened after the server
+      // started the claim, so ask for the real state instead of guessing.
+      try {
+        const g = await getGiftClient().getGift(id);
+        setGift(g);
+        if (g.status === "claimed") return finishClaim(g);
+        if (g.status === "claiming") return setClaim({ k: "pending", stuck: false });
+      } catch {
+        // fall through to an honest "unknown" message
+      }
       setClaim({
         k: "failed",
         message:
           code === "offline"
-            ? "You're offline, so nothing was sent. Your gift is still here."
-            : "Devnet didn’t accept the transfer. Nothing left the gift, so you can try again.",
+            ? "You're offline. Your gift is safe, and it will only ever be sent once."
+            : "We couldn't confirm the claim. Your gift is safe and will only be sent once, so it's fine to try again.",
       });
     }
   }
@@ -176,7 +218,7 @@ export function GiftScreen({ id }: { id: string }) {
       <TopBar />
       {offline && (
         <div className="banner" role="status">
-          You&rsquo;re offline. We&rsquo;ll pick up where you left off when you reconnect.
+          You&rsquo;re offline. We&rsquo;ll reload this gift when you reconnect.
         </div>
       )}
 
@@ -198,16 +240,21 @@ export function GiftScreen({ id }: { id: string }) {
           <CardMeta gift={gift} />
 
           {gift.status === "claimed" && (justClaimed || alreadyClaimed) && (
-            <div className={`notice ${justClaimed ? "notice--ok" : ""}`} role="status">
+            <div id="gift-notice" tabIndex={-1} className={`notice ${justClaimed ? "notice--ok" : ""}`} role="status">
               {justClaimed ? (
                 <>
                   <strong>Claimed.</strong> {gift.value.shares} {gift.ticker} devnet test tokens are in your wallet{" "}
                   {shortAddress(gift.recipientWallet)}.
                 </>
-              ) : (
+              ) : isRecipient ? (
                 <>
                   <strong>Already claimed.</strong> This gift went to wallet {shortAddress(gift.recipientWallet)}. A gift can
                   only be claimed once.
+                </>
+              ) : (
+                <>
+                  <strong>{gift.recipientName} claimed it.</strong> The tokens are in wallet{" "}
+                  {shortAddress(gift.recipientWallet)}.
                 </>
               )}
             </div>
@@ -216,15 +263,22 @@ export function GiftScreen({ id }: { id: string }) {
             <p className="hint">Only the private link {gift.recipientName} received can unwrap this gift.</p>
           )}
           {isRecipient && gift.status !== "claimed" && sheet === null && gift.status !== "wrapped" && (
-            <button type="button" className="btn btn--secondary" onClick={() => setSheet("reveal")}>
+            <button type="button" className="btn btn--secondary" onClick={() => setSheet("reveal")} id="show-gift">
               Show gift
             </button>
+          )}
+          {!isRecipient && (gift.status === "opened" || gift.status === "claiming") && (
+            <p className="hint">
+              {gift.status === "opened"
+                ? `${gift.recipientName} opened it and hasn't claimed it yet.`
+                : `It's on its way to ${gift.recipientName}'s wallet.`}
+            </p>
           )}
         </section>
       )}
 
       {gift && sheet !== null && (
-        <Sheet fromName={gift.senderName} onClose={() => setSheet(null)} labelledBy="sheet-title">
+        <Sheet fromName={gift.senderName} onClose={closeSheet} labelledBy="sheet-title" returnFocusTo={["gift-notice", "show-gift"]}>
           {(sheet === "box" || sheet === "unwrapping") && (
             <Closed
               gift={gift}
@@ -310,8 +364,9 @@ function Closed({
   error: string | null;
   onUnwrap: () => void;
 }) {
+  // tooEarly is reset on each tap, and the server clock has the final say.
   const locked =
-    gift.status === "wrapped" && Boolean(gift.opensAt && (tooEarly || Date.parse(gift.opensAt) > Date.now()));
+    gift.status === "wrapped" && Boolean(gift.opensAt && (tooEarly || Date.parse(gift.opensAt) > Date.now() + 60_000));
   return (
     <div className={`closed ${unwrapping ? "is-unwrapping" : ""}`}>
       <div className="closed__stage">
@@ -365,6 +420,19 @@ function Reveal({
   onSwap: (t: Ticker) => Promise<void>;
 }) {
   const [swapping, setSwapping] = useState(false);
+  const swapBtn = useRef<HTMLButtonElement>(null);
+  const returnToSwap = useRef(false);
+  const closeSwap = () => {
+    returnToSwap.current = true;
+    setSwapping(false);
+  };
+  useEffect(() => {
+    // Closing the picker unmounts it; put focus back on the button that opened it.
+    if (!swapping && returnToSwap.current) {
+      returnToSwap.current = false;
+      swapBtn.current?.focus();
+    }
+  }, [swapping]);
   const canAct = gift.status === "opened" && claim.k !== "sending";
   return (
     <div className="reveal">
@@ -389,36 +457,56 @@ function Reveal({
       {swapping ? (
         <SwapPicker
           current={gift.ticker}
-          onCancel={() => setSwapping(false)}
+          onCancel={closeSwap}
           onPick={async (t) => {
             await onSwap(t);
-            setSwapping(false);
+            closeSwap();
           }}
         />
       ) : (
         <div className="actions">
           <ClaimStatusPanel claim={claim} onRetry={onClaim} />
           {(claim.k === "idle" || claim.k === "sending") && (
-            <button type="button" className="btn btn--primary" onClick={onClaim} disabled={!canAct} aria-busy={claim.k === "sending"}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onClaim}
+              // Stay focusable while sending (aria-disabled), so focus isn't dropped to <body>.
+              disabled={gift.status !== "opened"}
+              aria-disabled={claim.k === "sending"}
+              aria-busy={claim.k === "sending"}
+            >
               {claim.k === "sending" ? "Claiming…" : "Claim to my wallet"}
             </button>
           )}
           {gift.status === "opened" && claim.k !== "pending" && (
-            <button type="button" className="btn btn--secondary" onClick={() => setSwapping(true)} disabled={!canAct}>
+            <button
+              type="button"
+              ref={swapBtn}
+              className="btn btn--secondary"
+              onClick={() => setSwapping(true)}
+              disabled={!canAct}
+            >
               Swap for a different stock
             </button>
           )}
-          <p className="fine">Tokenized stocks are only offered to eligible people outside the US.</p>
         </div>
       )}
+      <p className="fine">Tokenized stocks are only offered to eligible people outside the US.</p>
     </div>
   );
 }
 
 function ClaimStatusPanel({ claim, onRetry }: { claim: Claim; onRetry: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const key = claim.k === "pending" ? `pending-${claim.stuck}` : claim.k;
+  useEffect(() => {
+    // The claim button is replaced by this panel; move focus here so it isn't lost.
+    if (ref.current && (key.startsWith("pending") || key === "failed")) ref.current.focus();
+  }, [key]);
   if (claim.k === "pending") {
     return (
-      <div className="notice" role="status">
+      <div className="notice" role="status" tabIndex={-1} ref={ref}>
         {claim.stuck ? (
           <>
             <p>
@@ -439,7 +527,7 @@ function ClaimStatusPanel({ claim, onRetry }: { claim: Claim; onRetry: () => voi
   }
   if (claim.k === "failed") {
     return (
-      <div className="notice notice--error" role="alert">
+      <div className="notice notice--error" role="alert" tabIndex={-1} ref={ref}>
         <p>
           <strong>Claim didn&rsquo;t go through.</strong> {claim.message}
         </p>
@@ -464,14 +552,27 @@ function SwapPicker({
   const options = TICKERS.filter((t) => t !== current);
   const [choice, setChoice] = useState<Ticker>(options[0]!);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => first.current?.focus(), []);
   return (
     <form
       className="swap"
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
+        setError(null);
         try {
           await onPick(choice);
+        } catch (err) {
+          const code = codeOf(err);
+          setError(
+            code === "offline"
+              ? "You're offline. Your gift hasn't changed."
+              : code === "invalid_state"
+                ? "This gift can't be swapped any more."
+                : "Couldn't swap right now. Your gift hasn't changed.",
+          );
         } finally {
           setBusy(false);
         }
@@ -480,15 +581,27 @@ function SwapPicker({
       <fieldset className="swap__set">
         <legend className="label">Swap for the same dollar value of</legend>
         <div className="grid grid--stocks">
-          {options.map((t) => (
+          {options.map((t, i) => (
             <label key={t} className="choice choice--stock">
-              <input type="radio" name="swap" value={t} checked={choice === t} onChange={() => setChoice(t)} />
+              <input
+                type="radio"
+                name="swap"
+                value={t}
+                checked={choice === t}
+                onChange={() => setChoice(t)}
+                ref={i === 0 ? first : undefined}
+              />
               <span className="choice__sym">{stockSymbol(t)}</span>
               <span className="choice__name">{stockName(t)}</span>
             </label>
           ))}
         </div>
       </fieldset>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       <button type="submit" className="btn btn--primary" disabled={busy}>
         {busy ? "Swapping…" : `Swap to ${stockName(choice)}`}
       </button>

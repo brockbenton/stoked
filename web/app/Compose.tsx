@@ -13,7 +13,7 @@ import { useId, useState, type FormEvent } from "react";
 import { WrappedCard } from "@/components/Cards";
 import { DevnetLabel } from "@/components/DevnetLabel";
 import { GiftIcon } from "@/components/icons";
-import { getGiftClient } from "@/lib/client";
+import { GiftClientError, getGiftClient } from "@/lib/client";
 import { stockName, stockSymbol } from "@/lib/format";
 
 type Amount = (typeof GIFT_AMOUNTS_CENTS)[number];
@@ -50,7 +50,7 @@ export function Compose() {
       document.getElementById(next.recipientName ? ids.to : next.senderName ? ids.from : ids.at)?.focus();
       return;
     }
-    const req = CreateGiftRequest.parse({
+    const parsed = CreateGiftRequest.safeParse({
       senderName: senderName.trim(),
       recipientName: recipientName.trim(),
       ticker,
@@ -58,14 +58,26 @@ export function Compose() {
       ...(note.trim() ? { note: note.trim() } : {}),
       ...(opensIso ? { opensAt: opensIso } : {}),
     });
+    if (!parsed.success) {
+      setErrors({ form: "Something in the form isn't valid. Check the names and note." });
+      return;
+    }
     setBusy(true);
     try {
       const client = getGiftClient();
-      const { id, claimToken } = await client.createGift(req);
+      const { id, claimToken } = await client.createGift(parsed.data);
       const gift = await client.getGift(id);
       setSent({ gift, link: `${window.location.origin}/g/${id}#t=${claimToken}` });
-    } catch {
-      setErrors({ form: "Couldn't wrap the gift. Check your connection and try again." });
+    } catch (e) {
+      const code = e instanceof GiftClientError ? e.code : "internal";
+      setErrors({
+        form:
+          code === "rate_limited"
+            ? "Too many gifts from here right now. Wait a minute and try again."
+            : code === "offline"
+              ? "You're offline. Connect and try again."
+              : "Couldn't wrap the gift. Try again.",
+      });
     } finally {
       setBusy(false);
     }
