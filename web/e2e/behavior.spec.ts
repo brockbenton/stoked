@@ -57,6 +57,40 @@ test("swap keeps the dollar value and changes the stock", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "$10.00 of Tesla" })).toBeVisible();
 });
 
+test("an escrow gift offers no swap", async ({ page }) => {
+  await page.goto(giftUrl(ids.opened, { sim: "escrow" }));
+  await page.clock.runFor(1000);
+  await expect(page.getByRole("button", { name: "Claim to my wallet" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Swap for a different stock" })).toHaveCount(0);
+});
+
+for (const key of ["opened", "claiming"] as const) {
+  test(`an expired gift says so and offers no retry (${key})`, async ({ page }) => {
+    await page.goto(giftUrl(ids[key], { sim: "claim-expired" }));
+    await page.clock.runFor(1000);
+    if (key === "opened") await page.getByRole("button", { name: "Claim to my wallet" }).click();
+    await page.clock.runFor(3000);
+    const alert = page.locator(".notice--error");
+    await expect(alert).toContainText("This gift has expired.");
+    await expect(alert).toBeFocused();
+    for (const name of ["Try again", "Check again", "Claim to my wallet", "Swap for a different stock"]) {
+      await expect(page.getByRole("button", { name })).toHaveCount(0);
+    }
+  });
+}
+
+test("an open date more than a year ahead is explained on the field", async ({ page }) => {
+  await page.goto("/");
+  await page.clock.runFor(1000);
+  await page.getByLabel("To", { exact: true }).fill("Maya");
+  await page.getByLabel("From", { exact: true }).fill("Alex");
+  await page.getByRole("radio", { name: "Pick a time" }).check();
+  await page.getByLabel("Opens at").fill("2029-01-01T10:00");
+  await page.getByRole("button", { name: /^Wrap/ }).click();
+  await expect(page.getByText("Pick a time within the next year")).toBeVisible();
+  await expect(page.getByLabel("Opens at")).toBeFocused();
+});
+
 test("a claim error after the server started the claim shows pending, not failure", async ({ page }) => {
   await page.goto(giftUrl(ids.opened, { sim: "claim-moved,claim-stuck" }));
   await page.clock.runFor(1000);

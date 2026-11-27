@@ -4,12 +4,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./escrow": "./escrow/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:validator": "tsx scripts/with-validator.ts vitest run -c vitest.validator.config.ts --reporter=verbose",
+    "test:escrow": "tsx scripts/with-validator.ts --escrow vitest run -c vitest.escrow.config.ts --reporter=verbose",
+    "escrow:refund": "tsx escrow/refund-expired.ts",
     "setup:mints": "tsx src/scripts/setup-mints.ts",
     "multiplier": "tsx src/scripts/update-multiplier.ts"
   },

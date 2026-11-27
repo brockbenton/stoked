@@ -8,17 +8,23 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { GiftStore, PriceRecord } from "./store";
 import { rowToGift } from "./store-sql";
 
-const COLS =
-  "id,status,sender_name,recipient_name,ticker,usd_cents,price_cents,token_raw:token_raw::text,note,opens_at," +
-  "claim_token_hash,recipient_wallet,claim_signature,claim_last_valid_height:claim_last_valid_height::text," +
-  "created_at,opened_at,claimed_at";
+/**
+ * `*` rather than a column list: escrow_account is read wherever the column
+ * exists, however this server is configured (an escrow gift mistaken for a
+ * treasury gift would be paid twice), and a database without the escrow
+ * migration keeps working. The aliases keep numeric and bigint as text.
+ */
+const COLS = "*,token_raw_text:token_raw::text,claim_last_valid_height_text:claim_last_valid_height::text";
+
+const toGift = (r: Record<string, unknown>) =>
+  rowToGift({ ...r, token_raw: r.token_raw_text, claim_last_valid_height: r.claim_last_valid_height_text });
 
 export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
   const single = async (q: PromiseLike<{ data: unknown; error: { message: string } | null }>) => {
     const { data, error } = await q;
     if (error) throw new Error(`database error: ${error.message}`);
     const rows = (data ?? []) as Record<string, unknown>[];
-    return rows[0] ? rowToGift(rows[0]) : null;
+    return rows[0] ? toGift(rows[0]) : null;
   };
   const gifts = () => sb.from("gifts");
   return {
@@ -37,6 +43,7 @@ export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
             opens_at: g.opensAt,
             claim_token_hash: g.claimTokenHash,
             created_at: g.createdAt,
+            ...(g.escrowAccount ? { id: g.id, escrow_account: g.escrowAccount } : {}),
           })
           .select(COLS),
       );

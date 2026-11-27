@@ -3,6 +3,7 @@
 import {
   CreateGiftRequest,
   GIFT_AMOUNTS_CENTS,
+  MAX_OPENS_AHEAD_MS,
   TICKERS,
   formatUsd,
   type PublicGift,
@@ -43,6 +44,7 @@ export function Compose() {
       const t = Date.parse(opensAt);
       if (!opensAt || Number.isNaN(t)) next.opensAt = "Pick when it opens";
       else if (t <= Date.now()) next.opensAt = "Pick a time in the future";
+      else if (t > Date.now() + MAX_OPENS_AHEAD_MS) next.opensAt = "Pick a time within the next year";
       else opensIso = new Date(t).toISOString();
     }
     setErrors(next);

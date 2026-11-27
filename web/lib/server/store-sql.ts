@@ -32,13 +32,14 @@ export function rowToGift(r: Row): GiftRecord {
     createdAt: iso(r.created_at)!,
     openedAt: iso(r.opened_at),
     claimedAt: iso(r.claimed_at),
+    escrowAccount: (r.escrow_account as string | null) ?? null,
   };
 }
 
 // numeric/bigint as text so no driver turns them into lossy JS numbers.
 const COLS = `id, status, sender_name, recipient_name, ticker, usd_cents, price_cents, token_raw::text as token_raw,
   note, opens_at, claim_token_hash, recipient_wallet, claim_signature,
-  claim_last_valid_height::text as claim_last_valid_height, created_at, opened_at, claimed_at`;
+  claim_last_valid_height::text as claim_last_valid_height, created_at, opened_at, claimed_at, escrow_account`;
 
 export function createSqlGiftStore(db: SqlClient): GiftStore {
   const one = async (text: string, params: unknown[]) => {
@@ -48,9 +49,9 @@ export function createSqlGiftStore(db: SqlClient): GiftStore {
   return {
     async insert(g: NewGift) {
       const r = await one(
-        `insert into gifts (status, sender_name, recipient_name, ticker, usd_cents, price_cents, token_raw, note, opens_at, claim_token_hash, created_at)
-         values ('wrapped', $1, $2, $3, $4, $5, $6::numeric, $7, $8, $9, $10) returning ${COLS}`,
-        [g.senderName, g.recipientName, g.ticker, g.usdCents, g.priceCents, g.tokenRaw, g.note, g.opensAt, g.claimTokenHash, g.createdAt],
+        `insert into gifts (status, sender_name, recipient_name, ticker, usd_cents, price_cents, token_raw, note, opens_at, claim_token_hash, created_at, id, escrow_account)
+         values ('wrapped', $1, $2, $3, $4, $5, $6::numeric, $7, $8, $9, $10, coalesce($11::uuid, gen_random_uuid()), $12) returning ${COLS}`,
+        [g.senderName, g.recipientName, g.ticker, g.usdCents, g.priceCents, g.tokenRaw, g.note, g.opensAt, g.claimTokenHash, g.createdAt, g.id ?? null, g.escrowAccount ?? null],
       );
       if (!r) throw new Error("insert returned no row");
       return r;

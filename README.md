@@ -4,7 +4,7 @@
 
 **Live demo:** https://stoked-ebon.vercel.app
 
-> **Status:** the web flow works end to end on Solana **devnet**: send, unwrap, swap and claim. The tokens are test tokens with no monetary value, and prices are fixed demo prices. The iMessage app and on-chain escrow are not built.
+> **Status:** the web flow works end to end on Solana **devnet**: send, unwrap, swap and claim. The tokens are test tokens with no monetary value, and prices are fixed demo prices. An on-chain escrow program is built and tested on a local validator, but it is off by default and not deployed. The iMessage app is not built.
 
 ## What works today
 
@@ -37,7 +37,9 @@ Stock gift links already exist. What Stoked is aiming for is the conversation: t
 | API and web app | Next.js and TypeScript, deployed on Vercel |
 | Data | Supabase Postgres, readable and writable only by the server |
 
-A server-held treasury funds gifts and sends the transfers; senders don't pay. There is no on-chain program yet.
+A server-held treasury funds gifts and sends the transfers; senders don't pay.
+
+An [Anchor escrow program](docs/escrow.md) can hold each gift's tokens in a vault, release them once after the open time, and return them to the treasury after expiry. The live site doesn't use it yet. It isn't trustless: the server still creates and signs every claim.
 
 ## Run the checks
 
@@ -48,6 +50,7 @@ pnpm install
 pnpm lint && pnpm typecheck && pnpm test
 pnpm --filter @stoked/web exec playwright install chromium
 pnpm test:e2e
+pnpm test:escrow   # also needs Rust; not run in CI
 ```
 
 Devnet setup, mint addresses and the deployed smoke test are in [docs/devnet.md](docs/devnet.md).
@@ -56,7 +59,7 @@ Devnet setup, mint addresses and the deployed smoke test are in [docs/devnet.md]
 
 - Devnet only. Test tokens are not securities and have no value.
 - Prices are fixed demo values, not market data.
-- Gifts are funded by the treasury, and nothing is held in escrow.
+- On the live site, gifts are funded by the treasury and nothing is held in escrow.
 - Anyone holding a gift's claim link can claim it.
 - The recipient's wallet lives only in their browser. Clearing site data loses it.
 - Not yet tested in Safari or on a phone.
@@ -66,6 +69,7 @@ Devnet setup, mint addresses and the deployed smoke test are in [docs/devnet.md]
 
 - [Build plan](docs/build-plan.md): architecture, contracts, schedule, risks
 - [Devnet](docs/devnet.md): addresses, setup, verification
+- [Escrow](docs/escrow.md): program design and threat model
 - [Design](docs/design.md): screens, tokens, motion
 - [Agent goals](docs/goals.md): ready-to-run `/goal` statements
 - [CLAUDE.md](CLAUDE.md): rules for coding agents
@@ -93,4 +97,6 @@ The smoke test last passed on the live site after #7, at commit [`80a54c8`](http
 
 ### During
 
-Nothing yet.
+| Work | Pull request |
+|---|---|
+| Escrow program (Anchor), TypeScript client, API support behind a flag, design and threat model | [#10](https://github.com/brockbenton/stoked/pull/10) |
