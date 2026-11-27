@@ -2,7 +2,7 @@
 
 A small Anchor program that locks one gift's tokens in its own vault until the recipient claims them or the gift expires. Code: [`programs/escrow`](../programs/escrow), TypeScript client: [`packages/chain/escrow`](../packages/chain/escrow). Devnet and local validator only.
 
-The program is [deployed to devnet](#deployment). The API creates escrow gifts only when `STOKED_ESCROW=1`. The flag is off by default, and the live app doesn't set it.
+The program is [deployed to devnet](#deployment). The API creates escrow gifts when `STOKED_ESCROW=1` (the treasury funds them) or `STOKED_PAYMENT_MINT` is set ([the sender pays](#wallet-paid-gifts)). Both are off by default.
 
 ## Framework
 
@@ -79,7 +79,7 @@ The app's mints have three extensions: `MetadataPointer`, `TokenMetadata` and `S
 
 ### Sender, relayer, claim key
 
-Clients still never sign. The **on-chain sender is the server's treasury**: it signs `create_gift`, pays fees and rent, and is the only key that can refund. The person who sends a gift in the app has no wallet and gets nothing back on chain.
+This section and the next two describe treasury-funded gifts; [wallet-paid gifts](#wallet-paid-gifts) differ as listed there. Clients don't sign. The **on-chain sender is the server's treasury**: it signs `create_gift`, pays fees and rent, and is the only key that can refund. The person who sends a gift in the app has no wallet and gets nothing back on chain.
 
 The claim key is derived, never stored:
 
@@ -117,9 +117,38 @@ Swapping stays off because the program has no way to take tokens back before exp
 | Variable | Meaning |
 |---|---|
 | `ESCROW_PROGRAM_ID` | The deployed program. Set it to enable the escrow code at all, and **keep it set while any escrow gift exists** |
-| `STOKED_ESCROW` | `1` makes new gifts escrow gifts. Requires `ESCROW_PROGRAM_ID` |
+| `STOKED_ESCROW` | `1` makes new treasury-funded gifts escrow gifts. Requires `ESCROW_PROGRAM_ID` |
+| `STOKED_PAYMENT_MINT` | A token mint: senders pay with it from their wallet. Requires `ESCROW_PROGRAM_ID` |
+| `STOKED_PAYMENT_SYMBOL` | The token's name in the app; `USDC` by default |
 
 The server reads whole rows, so it runs on a database without the escrow migration and still recognises an escrow gift when `ESCROW_PROGRAM_ID` is unset: it refuses to claim or swap it. **Code from before escrow does not.** It would pay an escrow gift from the treasury while the vault stays claimable by whoever has the link. Every deployment that shares the database (Preview and Production do today) must therefore run this code before the first escrow gift is created, and production must never be rolled back past it while escrow gifts exist.
+
+## Wallet-paid gifts
+
+With `STOKED_PAYMENT_MINT` set, the sender pays from their own wallet and **is the on-chain sender**. The program is unchanged. One transaction does everything, so it all happens or none of it:
+
+| # | Instruction | Signed by |
+|---|---|---|
+| 1 | Create the treasury's payment token account if missing | sender |
+| 2 | Pay the price (usd amount, in the payment token) to the treasury | sender |
+| 3 | Create the sender's stock token account if missing | sender |
+| 4 | Move the stock tokens from the treasury to the sender | treasury |
+| 5 | `create_gift`: lock them in the vault | sender |
+
+The sender also pays the fee and the new accounts' rent (about 0.01 devnet SOL).
+
+1. **Prepare.** The server prices the gift, checks the wallet can pay, and returns the transaction unsigned, with the terms signed as a ticket (HMAC, key derived from the treasury key). Nothing is stored.
+2. **Sign.** The wallet signs first, as [Phantom advises](https://docs.phantom.com/developer-powertools/domain-and-transaction-warnings) for transactions with several signers, so it can add its guard instructions.
+3. **Submit.** The server rebuilds the instructions from the ticket and the claim token and compares. It co-signs only if the transaction has exactly those, in order, plus at most compute-budget and [Lighthouse](https://docs.phantom.com/developer-powertools/lighthouse) instructions that don't name the treasury; the wallet pays the fee; there are exactly the two signers; and the wallet's signature verifies. It then simulates, writes the row, sends and waits. Repeating a submit is safe: the gift account can be created only once, so a gift can't be paid for twice.
+
+The rule in step 3 is what protects the treasury: its signature covers the whole transaction, so any other instruction naming it could spend with its authority. See [`paid.ts`](../packages/chain/escrow/paid.ts) and its [tests](../packages/chain/test/paid.test.ts).
+
+What differs from a treasury-funded gift:
+
+- **Claiming** is the same: the server signs with the claim key and pays the fee. The recipient connects a wallet (only its address is used) or makes one in the browser.
+- **Refunds** go to the sender, who is the only one who can sign them. The app has no button for this yet, and `escrow:refund` only covers the treasury's own gifts, so an unclaimed wallet-paid gift stays locked. The payment is not returned.
+- **Swap** stays off, as for any escrow gift.
+- A submit that never lands leaves a `wrapped` row with no gift on chain. Its link is never shown.
 
 ## Never pay twice
 
@@ -171,6 +200,7 @@ For a gift that exists on chain, assuming the program isn't upgraded:
 | Database write access | Already enough to redirect treasury-transfer gifts | Release a vault without the token. It can still clear `escrow_account` and have the treasury pay a second time |
 | **Malicious or compromised running server** | **Keep claim tokens it generates or receives, and claim to any wallet from `open_at`; substitute the recipient when signing a claim; never create or never refund** | Claim before `open_at`, or take from a vault whose token it didn't retain |
 | **Program upgrade authority** | **Replace the program and take every vault** | |
+| Sender with a modified page (wallet payments) | Have their own transaction refused | Change the price, the amount or the claim key, or get the treasury to sign anything else |
 
 The two bold rows are the real trust assumptions. The server generates every claim token and signs every claim, so the escrow doesn't make the app trustless. It narrows what a stolen treasury key or database can do, and lets anyone check on chain that a gift is funded, when it opens and who received it. Client-side token generation and signing would remove the server rows; v1 doesn't do that.
 
@@ -229,14 +259,12 @@ Deployed to devnet on 2026-11-27.
 
 ### Turning it on
 
-Not done yet: no escrow gift has been created or claimed through a deployed app.
-
 1. In the Supabase SQL editor, run `supabase/migrations/20261127000000_escrow.sql`.
 2. Make sure every deployment that shares the database runs code with escrow support ([why](#configuration)).
-3. Set `ESCROW_PROGRAM_ID` and `STOKED_ESCROW=1` for a Vercel preview, redeploy it, and create, claim and check one gift on the explorer.
-4. Only then set both for Production and redeploy.
+3. Set `ESCROW_PROGRAM_ID`, and `STOKED_PAYMENT_MINT` (wallet payments) or `STOKED_ESCROW=1`, for a Vercel preview. Redeploy it, then create, claim and check one gift on the explorer.
+4. Only then set the same for Production and redeploy.
 
-To roll back, unset `STOKED_ESCROW` only, and keep `ESCROW_PROGRAM_ID`.
+To roll back, unset `STOKED_PAYMENT_MINT` and `STOKED_ESCROW` only, and keep `ESCROW_PROGRAM_ID`.
 
 ### Refunds
 

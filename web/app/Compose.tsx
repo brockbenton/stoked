@@ -10,15 +10,47 @@ import {
   type Ticker,
 } from "@stoked/shared";
 import Link from "next/link";
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { CardMeta, OpenedCard, WrappedCard } from "@/components/Cards";
 import { GiftIcon } from "@/components/icons";
+import { PayActions } from "@/components/PayActions";
 import { GiftClientError, getGiftClient } from "@/lib/client";
 import { useGiftPoll } from "@/lib/client/use-gift-poll";
-import { stockName, stockSymbol } from "@/lib/format";
+import { usePayment, type SentGift } from "@/lib/client/use-payment";
+import { useAppConfig, useWallet } from "@/lib/client/use-wallet";
+import { explorerTxUrl, stockName, stockSymbol } from "@/lib/format";
 
 type Amount = (typeof GIFT_AMOUNTS_CENTS)[number];
-type Sent = { gift: PublicGift; link: string };
+type Sent = { gift: PublicGift; link: string; payment?: { price: string; signature: string | null } };
+
+/** The form, kept while the sender is away in the Phantom app. */
+const DRAFT = "stoked-draft";
+interface Draft {
+  recipientName: string;
+  senderName: string;
+  ticker: Ticker;
+  amount: Amount;
+  note: string;
+  when: "now" | "later";
+  opensAt: string;
+}
+
+function readDraft(): Draft | null {
+  try {
+    return JSON.parse(localStorage.getItem(DRAFT) ?? "null") as Draft | null;
+  } catch {
+    return null;
+  }
+}
+
+const wrapped = (id: string, req: SentGift["request"]): PublicGift => ({
+  id,
+  status: "wrapped",
+  senderName: req.senderName,
+  recipientName: req.recipientName,
+  opensAt: req.opensAt ?? null,
+  createdAt: new Date().toISOString(),
+});
 
 /** 01: pick a stock, an amount, a note and when it opens. */
 export function Compose() {
@@ -33,9 +65,38 @@ export function Compose() {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<Sent | null>(null);
   const ids = { to: useId(), from: useId(), note: useId(), at: useId() };
+  const config = useAppConfig();
+  const payment = config?.payment ?? null;
+  const wallet = useWallet();
+  const paying = usePayment(Boolean(payment));
+  const price = `${amount / 100} ${payment?.symbol ?? ""}`;
+
+  useEffect(() => {
+    const d = readDraft();
+    if (!d) return;
+    setRecipient(d.recipientName);
+    setSender(d.senderName);
+    setTicker(d.ticker);
+    setAmount(d.amount);
+    setNote(d.note);
+    setWhen(d.when);
+    setOpensAt(d.opensAt);
+  }, []);
+  useEffect(() => {
+    if (!payment) return;
+    const draft: Draft = { recipientName, senderName, ticker, amount, note, when, opensAt };
+    try {
+      localStorage.setItem(DRAFT, JSON.stringify(draft));
+    } catch {
+      // Private mode: nothing to keep it in.
+    }
+  }, [payment, recipientName, senderName, ticker, amount, note, when, opensAt]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!config) return;
+    // On a wallet deployment, only the Pay button submits (not Enter in a field mid-payment).
+    if (payment && (!wallet.address || !["idle", "failed"].includes(paying.state.k))) return;
     const next: typeof errors = {};
     if (!recipientName.trim()) next.recipientName = "Add who it's for";
     if (!senderName.trim()) next.senderName = "Add your name";
@@ -64,21 +125,13 @@ export function Compose() {
       setErrors({ form: "Something in the form isn't valid. Check the names and note." });
       return;
     }
+    if (payment) return void paying.pay(parsed.data, wallet.address!);
     setBusy(true);
     try {
       const client = getGiftClient();
       const { id, claimToken } = await client.createGift(parsed.data);
       // The token is returned once, so a failed read must not lose the link.
-      const gift = await client.getGift(id).catch(
-        (): PublicGift => ({
-          id,
-          status: "wrapped",
-          senderName: parsed.data.senderName,
-          recipientName: parsed.data.recipientName,
-          opensAt: parsed.data.opensAt ?? null,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      const gift = await client.getGift(id).catch(() => wrapped(id, parsed.data));
       setSent({ gift, link: `${window.location.origin}/g/${id}#t=${claimToken}` });
     } catch (e) {
       const code = e instanceof GiftClientError ? e.code : "internal";
@@ -96,6 +149,11 @@ export function Compose() {
   }
 
   if (sent) return <SentView sent={sent} onAgain={() => setSent(null)} />;
+  if (paying.sent) {
+    const { id, link, request, signature } = paying.sent;
+    const paid = { price: `${request.usdCents / 100} ${payment?.symbol ?? ""}`, signature };
+    return <SentView key={id} sent={{ gift: wrapped(id, request), link, payment: paid }} onAgain={paying.clearSent} />;
+  }
 
   return (
     <form className="compose" onSubmit={submit} noValidate aria-labelledby="compose-title">
@@ -209,10 +267,21 @@ export function Compose() {
           {errors.form}
         </p>
       )}
-      <button type="submit" className="btn btn--primary btn--wrap" disabled={busy} aria-busy={busy}>
-        <GiftIcon className="btn__icon" />
-        {busy ? "Wrapping…" : `Wrap ${formatUsd(amount).replace(".00", "")} of ${stockName(ticker)}`}
-      </button>
+      {payment ? (
+        <PayActions
+          wallet={wallet}
+          state={paying.state}
+          price={price}
+          what={stockName(ticker)}
+          onConfirm={() => void paying.confirm()}
+          onCancel={paying.cancel}
+        />
+      ) : (
+        <button type="submit" className="btn btn--primary btn--wrap" disabled={busy || !config} aria-busy={busy}>
+          <GiftIcon className="btn__icon" />
+          {busy ? "Wrapping…" : `Wrap ${formatUsd(amount).replace(".00", "")} of ${stockName(ticker)}`}
+        </button>
+      )}
     </form>
   );
 }
@@ -285,6 +354,19 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
       <p className="sent__status" role="status">
         {status}
       </p>
+      {sent.payment && (
+        <p className="wallet-line">
+          Paid {sent.payment.price} from your wallet.
+          {sent.payment.signature && (
+            <>
+              {" "}
+              <a className="meta__link" href={explorerTxUrl(sent.payment.signature)} target="_blank" rel="noreferrer">
+                View the payment on explorer
+              </a>
+            </>
+          )}
+        </p>
+      )}
       {!claimed && (
         <>
           <div className="field">

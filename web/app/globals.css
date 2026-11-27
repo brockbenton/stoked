@@ -449,6 +449,36 @@ a {
   color: var(--green-900);
 }
 
+/* ---------- connected wallet (payment and claim) ---------- */
+
+.pay {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wallet-line {
+  color: var(--ink-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+.quiet {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--green-900);
+  cursor: pointer;
+}
+
 /* ---------- wallet ---------- */
 
 .wallet {

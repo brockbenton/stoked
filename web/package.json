@@ -14,6 +14,7 @@
     "test:e2e": "pnpm test:ui && pnpm test:flow",
     "test:smoke": "playwright test -c playwright.smoke.config.ts",
     "test:escrow": "tsx ../packages/chain/scripts/with-validator.ts --escrow vitest run -c vitest.escrow.config.ts --reporter=verbose",
+    "test:wallet": "tsx ../packages/chain/scripts/with-validator.ts --escrow tsx e2e-wallet/run.ts",
     "test:validator": "tsx ../packages/chain/scripts/with-validator.ts vitest run -c vitest.validator.config.ts --reporter=verbose"
   },
   "dependencies": {
@@ -25,7 +26,8 @@
     "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.1",

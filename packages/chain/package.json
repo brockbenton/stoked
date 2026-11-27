@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./escrow": "./escrow/index.ts"
+    "./escrow": "./escrow/index.ts",
+    "./test-mint": "./escrow/test-mint.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

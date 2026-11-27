@@ -48,7 +48,9 @@ export const ERROR_STATUS = {
   bad_request: 400,
   validation_failed: 400,
   invalid_wallet: 400,
+  payment_rejected: 400,
   unauthorized: 401,
+  insufficient_funds: 402,
   forbidden: 403,
   not_found: 404,
   invalid_state: 409,
@@ -91,6 +93,47 @@ export const CreateGiftResponse = z.strictObject({
   claimToken: ClaimToken,
 });
 export type CreateGiftResponse = z.infer<typeof CreateGiftResponse>;
+
+// ---------- wallet payment (docs/escrow.md § Wallet-paid gifts) ----------
+
+/** GET /api/config. `payment` is null when senders don't pay. */
+export const AppConfig = z.strictObject({
+  payment: z.strictObject({ symbol: z.string().min(1).max(12), mint: WalletAddress }).nullable(),
+});
+export type AppConfig = z.infer<typeof AppConfig>;
+
+/** A serialized Solana transaction, base58. 1232 bytes is under 1700 characters. */
+export const SerializedTransaction = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{100,1700}$/);
+
+/** POST /api/gifts/prepare */
+export const PrepareGiftRequest = z.strictObject({ gift: CreateGiftRequest, senderWallet: WalletAddress });
+export type PrepareGiftRequest = z.infer<typeof PrepareGiftRequest>;
+
+export const PrepareGiftResponse = z.strictObject({
+  id: Uuid,
+  claimToken: ClaimToken,
+  /** Unsigned: the sender's wallet signs it first. */
+  transaction: SerializedTransaction,
+  /** The terms, signed by the server. Returned unchanged to /submit. */
+  ticket: z.string().min(1).max(4000),
+});
+export type PrepareGiftResponse = z.infer<typeof PrepareGiftResponse>;
+
+/** POST /api/gifts/submit (claim token in the Authorization header). Safe to repeat. */
+export const SubmitGiftRequest = z.strictObject({
+  ticket: z.string().min(1).max(4000),
+  transaction: SerializedTransaction,
+});
+export type SubmitGiftRequest = z.infer<typeof SubmitGiftRequest>;
+
+/** 200 once the payment and lock are confirmed, 202 while pending. */
+export const SubmitGiftResponse = z.strictObject({
+  status: z.enum(["confirmed", "pending"]),
+  id: Uuid,
+  /** Null if an earlier transaction for the same gift is the one that landed. */
+  signature: TransactionSignature.nullable(),
+});
+export type SubmitGiftResponse = z.infer<typeof SubmitGiftResponse>;
 
 /** POST /api/gifts/:id/open takes no body. */
 export const OpenGiftRequest = z.strictObject({});

@@ -77,7 +77,10 @@ JSON. Errors: `{ error: { code, message } }`.
 
 | Route | Auth | Behavior |
 |---|---|---|
-| `POST /api/gifts` | — | `{senderName, recipientName, ticker, usdCents, note?, opensAt?}` → `{id, claimToken}`. Amount is 1000, 2500 or 5000 |
+| `GET /api/config` | — | `{payment: {symbol, mint} \| null}`: whether senders pay from a wallet |
+| `POST /api/gifts` | — | `{senderName, recipientName, ticker, usdCents, note?, opensAt?}` → `{id, claimToken}`. Amount is 1000, 2500 or 5000. 403 when wallet payments are on |
+| `POST /api/gifts/prepare` | — | Wallet payments only. `{gift, senderWallet}` → `{id, claimToken, transaction, ticket}`. Stores nothing. 402 if the wallet can't pay |
+| `POST /api/gifts/submit` | token | Wallet payments only. `{ticket, transaction}` (signed by the wallet) → `{status, id, signature}`. 200 confirmed, 202 pending; safe to repeat |
 | `GET /api/gifts/:id` | — | Public state. Before opening, the gift's ticker, amount and note are **absent**, not just hidden |
 | `POST /api/gifts/:id/open` | token | `wrapped → opened`. 425 `too_early` before `opensAt` (server clock) |
 | `POST /api/gifts/:id/swap` | token | `{ticker}`, only while `opened`; same USD value |
@@ -100,7 +103,7 @@ The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; thi
   - `opened` and later: `ticker, usdCents, note, tokenRaw, openedAt, value{priceCents, priceSource, priceUpdatedAt, multiplier, shares, valueCents}`.
   - `claiming`: `recipientWallet, claimSignature|null`. `claimed`: `recipientWallet, claimSignature, claimedAt`.
 - **Claim response:** 200 `{status:"claimed", signature, gift}`; 202 `{status:"pending", signature|null, gift}`.
-- **Error codes → HTTP:** `bad_request`, `validation_failed`, `invalid_wallet` 400; `unauthorized` 401; `forbidden` 403; `not_found` 404; `invalid_state` 409; `expired` 410 (escrow gifts only); `too_early` 425; `rate_limited` 429; `internal` 500; `chain_unavailable` 503.
+- **Error codes → HTTP:** `bad_request`, `validation_failed`, `invalid_wallet`, `payment_rejected` 400; `unauthorized` 401; `insufficient_funds` 402; `forbidden` 403; `not_found` 404; `invalid_state` 409; `expired` 410 (escrow gifts only); `too_early` 425; `rate_limited` 429; `internal` 500; `chain_unavailable` 503.
 
 ### Claim must never pay twice
 
@@ -123,6 +126,10 @@ Off by default. `ESCROW_PROGRAM_ID` enables the code; `STOKED_ESCROW=1` makes ne
 - **Claim:** the same five steps, with the program's `claim` (signed by a key derived from the claim token) in place of the treasury transfer. The server reads the gift on chain before binding a wallet and before building: not yet open by cluster time → 425 `too_early`; expired or refunded → 410 `expired`; claimed to another wallet → 409 `invalid_state`; already claimed to the bound wallet → record that transaction and answer claimed.
 - **Expiry:** there is no expired status; claiming answers 410 and the gift screen says it expired. `pnpm --filter @stoked/chain escrow:refund` returns expired gifts to the treasury.
 
+### Wallet payments
+
+Off unless `STOKED_PAYMENT_MINT` is set. Then the sender pays from Phantom and is the escrow's on-chain sender; creation without payment is refused. `gift` in `prepare` is the `POST /api/gifts` body. `transaction` is base58. `ticket` is the gift's terms signed by the server, which the browser returns unchanged. Details and checks: [escrow.md](escrow.md#wallet-paid-gifts).
+
 ### Running locally
 
 `STOKED_LOCAL_DB=1` swaps Supabase for an in-process PGlite database running the real migration (lost on restart). The server refuses it unless `SOLANA_RPC_URL` is a loopback address, and always on Vercel.
@@ -132,7 +139,8 @@ Off by default. `ESCROW_PROGRAM_ID` enables the code; `STOKED_ESCROW=1` makes ne
 | `pnpm test:e2e` | Both browser suites below |
 | `pnpm --filter @stoked/web test:ui` | UI states on fixtures (`NEXT_PUBLIC_STOKED_CLIENT=fixture`, set by the Playwright config) |
 | `pnpm --filter @stoked/web test:flow` | Real API, local database and `solana-test-validator`: send, claim, refresh mid-claim, link preview, token and key leaks |
-| `pnpm test:escrow` | Builds the escrow program, then program tests, the TypeScript client and the API on `solana-test-validator`. Needs the Solana CLI; not run in CI |
+| `pnpm test:escrow` | Builds the escrow program, then program tests, the TypeScript client, the API and the wallet browser tests on `solana-test-validator`. Needs the Solana CLI; not run in CI |
+| `pnpm --filter @stoked/web test:wallet` | Wallet-paid gifts in the browser, with Phantom simulated (needs the program already built) |
 
 ### Who can claim
 
@@ -140,4 +148,4 @@ The link carries the token, `/g/:id#t=…`. The fragment stays out of server log
 
 ## Web client
 
-`/` compose, `/g/:id` gift, `/w` wallet. After wrapping, the main button opens the system share sheet; without one, Copy is the main button. The gift page polls every 3 seconds while the tab is visible (15 once claimed). The Open Graph image shows a wrapped card and never the contents. The wallet is a non-extractable Ed25519 WebCrypto key in IndexedDB; clearing browser data loses it, which is acceptable on devnet and stated on the wallet screen.
+`/` compose, `/g/:id` gift, `/w` wallet. With wallet payments on, compose has the sender connect Phantom and pay, and the gift screen has the recipient connect Phantom, with the browser wallet as a second choice. Phantom is reached through its extension or in-app browser, or on a phone through its [deeplinks](https://docs.phantom.com/phantom-deeplinks/deeplinks-ios-and-android): the page opens the app and the reply may load in a new tab, so the form, the claim token and a pending payment are kept in `localStorage` until it returns. The claim token is never put in a link sent to Phantom. After wrapping, the main button opens the system share sheet; without one, Copy is the main button. The gift page polls every 3 seconds while the tab is visible (15 once claimed). The Open Graph image shows a wrapped card and never the contents. The wallet is a non-extractable Ed25519 WebCrypto key in IndexedDB; clearing browser data loses it, which is acceptable on devnet and stated on the wallet screen.

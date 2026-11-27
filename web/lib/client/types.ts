@@ -3,11 +3,16 @@
  * fixtures for UI tests (docs/build-plan.md § API, schemas in @stoked/shared).
  */
 import type {
+  AppConfig,
   ClaimGiftResponse,
   CreateGiftRequest,
   CreateGiftResponse,
   ErrorCode,
+  PrepareGiftRequest,
+  PrepareGiftResponse,
   PublicGift,
+  SubmitGiftRequest,
+  SubmitGiftResponse,
   Ticker,
   WalletResponse,
 } from "@stoked/shared";
@@ -25,6 +30,12 @@ export class GiftClientError extends Error {
 }
 
 export interface GiftClient {
+  /** What this deployment asks of senders. */
+  getConfig(): Promise<AppConfig>;
+  /** A priced gift and the transaction for the sender's wallet to sign. */
+  prepareGift(req: PrepareGiftRequest): Promise<PrepareGiftResponse>;
+  /** Send the signed payment. Repeat while pending. */
+  submitGift(token: string, req: SubmitGiftRequest): Promise<SubmitGiftResponse>;
   createGift(req: CreateGiftRequest): Promise<CreateGiftResponse>;
   getGift(id: string): Promise<PublicGift>;
   /** wrapped → opened. Rejects with `too_early` before opensAt. */

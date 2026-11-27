@@ -9,14 +9,14 @@ Read `docs/build-plan.md` before coding: it owns the architecture and contracts.
 - **Solana devnet, Dev3pack.** No Base work.
 - **Web first.** Mac access is unconfirmed, so nothing may depend on iOS. Extension work starts only on a Mac with Xcode.
 - **One TypeScript backend:** Next.js route handlers, with Supabase for Postgres.
-- **Wallet:** keypair generated on the recipient's device. Only the public key leaves it. Embedded wallets are out of scope.
+- **Wallets:** the sender pays from Phantom and the recipient connects Phantom, or makes a keypair on their device (only the public key leaves it). Embedded wallets are out of scope. Payments are devnet tokens, never real money.
 - **P2P only.** Group chip-in isn't built.
 
 ## Rules
 
 - Devnet or a local validator only. Never call mainnet with a signer.
 - Never commit or print secrets: treasury key, deployer or program keypairs, service-role key, claim tokens. Update `.env.example` when adding a variable.
-- Clients never sign in v1; the server does every transfer. Server secrets never get a `NEXT_PUBLIC_` prefix.
+- The only transaction a client signs is its own wallet payment, which the server must verify instruction by instruction before co-signing (`docs/escrow.md`). Server secrets never get a `NEXT_PUBLIC_` prefix.
 - Display amount = raw × effective multiplier. Transfers use raw units. Money is integer cents; raw token units are bigint (strings in JSON).
 - Pin `@solana/web3.js` to v1 (`^1.95.5`): `@solana/spl-token` 0.4.x requires it and npm's latest is v3.
 - Change the API or schema in `docs/build-plan.md` in the same commit as the code.

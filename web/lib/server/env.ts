@@ -4,9 +4,10 @@
  */
 import "server-only";
 import { chainConfigFromEnv, createSolanaChain, getRawHoldings, type SolanaChainOptions } from "@stoked/chain";
-import { createSolanaEscrow } from "@stoked/chain/escrow";
+import { createSolanaEscrow, createSolanaPayment } from "@stoked/chain/escrow";
 import { PublicKey } from "@solana/web3.js";
 import { createClient } from "@supabase/supabase-js";
+import { hkdfSync } from "node:crypto";
 import { ApiError } from "./errors";
 import { localDbClient } from "./local-db";
 import { createRateLimiter } from "./rate-limit";
@@ -62,6 +63,23 @@ export function escrowSettings(env: Record<string, string | undefined>) {
   }
 }
 
+/**
+ * STOKED_PAYMENT_MINT makes senders pay for gifts from their own wallet with
+ * that token (docs/escrow.md § Wallet-paid gifts). Needs the escrow.
+ */
+export function paymentSettings(env: Record<string, string | undefined>) {
+  const id = env.STOKED_PAYMENT_MINT;
+  if (!id) return undefined;
+  if (!env.ESCROW_PROGRAM_ID) throw new ApiError("internal", "STOKED_PAYMENT_MINT needs ESCROW_PROGRAM_ID");
+  let mint: PublicKey;
+  try {
+    mint = new PublicKey(id);
+  } catch {
+    throw new ApiError("internal", "STOKED_PAYMENT_MINT isn't a Solana address");
+  }
+  return { mint, symbol: env.STOKED_PAYMENT_SYMBOL || "USDC" };
+}
+
 function giftStore(): GiftStore {
   if (process.env.STOKED_LOCAL_DB === "1") {
     if (!localDbAllowed(process.env)) {
@@ -85,6 +103,7 @@ function localConfirmPolls(): number | undefined {
 export function getService(): GiftService {
   if (service) return service;
   const escrow = escrowSettings(process.env);
+  const payment = paymentSettings(process.env);
   const store = giftStore();
   const config = chainConfig();
   service = createGiftService({
@@ -93,6 +112,12 @@ export function getService(): GiftService {
     escrow: escrow && {
       adapter: createSolanaEscrow({ ...config, programId: escrow.programId }),
       createGifts: escrow.createGifts,
+    },
+    payments: payment && {
+      adapter: createSolanaPayment({ ...config, programId: escrow!.programId, paymentMint: payment.mint }),
+      ticketKey: new Uint8Array(hkdfSync("sha256", config.treasury.secretKey, "", "stoked:payment-ticket:v1", 32)),
+      symbol: payment.symbol,
+      confirmPolls: localConfirmPolls(),
     },
     rateLimiter: createRateLimiter({ perKey: 5, global: 100, windowMs: 60_000 }),
     confirmPolls: localConfirmPolls(),
