@@ -26,7 +26,9 @@ function chainConfig(): SolanaChainOptions & { mints: NonNullable<SolanaChainOpt
   try {
     const config = chainConfigFromEnv(process.env);
     return { ...config, mints: config.mints! };
-  } catch {
+  } catch (err) {
+    // For the server log only. These messages name the setting that is wrong, never its value.
+    console.error(`[stoked] solana configuration failed: ${err instanceof Error ? err.message : "unknown error"}`);
     throw new ApiError("chain_unavailable", "Server is missing its Solana configuration");
   }
 }
