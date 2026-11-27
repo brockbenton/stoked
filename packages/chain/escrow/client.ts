@@ -150,8 +150,11 @@ export async function listGifts(connection: Connection, programId: PublicKey, se
 
 export interface RefundResult {
   account: PublicKey;
-  signature: string;
-  state: "confirmed" | "pending" | "expired" | "failed";
+  /** Null if the refund failed before a transaction was signed. */
+  signature: string | null;
+  state: "confirmed" | "pending" | "expired" | "failed" | "error";
+  /** Why, when state is "error". */
+  error?: string;
 }
 
 /** Refund each of the sender's open gifts that has expired. Safe to rerun. */
@@ -166,12 +169,20 @@ export async function refundExpiredGifts(input: {
   const results: RefundResult[] = [];
   for (const gift of gifts) {
     if (gift.status !== "open") continue;
-    const { clusterTime } = await readGift(connection, programId, gift.address);
-    if (clusterTime < gift.expiresAt) continue;
-    const tx = await buildRefundTransaction({ connection, programId, sender, account: gift.address });
-    await sendClaimTransaction(connection, tx);
-    const status = await waitForClaim(connection, tx);
-    results.push({ account: gift.address, signature: tx.signature, state: status.state });
+    let signature: string | null = null;
+    try {
+      const { clusterTime } = await readGift(connection, programId, gift.address);
+      if (clusterTime < gift.expiresAt) continue;
+      const tx = await buildRefundTransaction({ connection, programId, sender, account: gift.address });
+      signature = tx.signature;
+      await sendClaimTransaction(connection, tx);
+      const status = await waitForClaim(connection, tx);
+      results.push({ account: gift.address, signature, state: status.state });
+    } catch (err) {
+      // One gift's failure must not strand the others. URLs are dropped: an RPC URL can carry a key.
+      const why = err instanceof Error ? err.message.replace(/https?:\/\/\S+/g, "<url>").slice(0, 200) : "unknown error";
+      results.push({ account: gift.address, signature, state: "error", error: why });
+    }
   }
   return results;
 }

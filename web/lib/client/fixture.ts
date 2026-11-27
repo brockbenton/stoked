@@ -24,9 +24,20 @@ import { GiftClientError, type GiftClient, type WalletSource } from "./types";
  * claim-fail: claim is rejected and nothing changes. claim-moved: the claim
  * request errors *after* the server moved the gift to claiming (e.g. a
  * timeout). swap-fail: swap errors. claim-stuck: a pending claim never lands.
+ * claim-expired: claiming says the gift expired. escrow: opened gifts can't be
+ * swapped.
  */
-export type Sim = "claim-fail" | "claim-moved" | "swap-fail" | "offline" | "slow" | "claim-stuck";
-const ALL_SIMS: Sim[] = ["claim-fail", "claim-moved", "swap-fail", "offline", "slow", "claim-stuck"];
+const ALL_SIMS = [
+  "claim-fail",
+  "claim-moved",
+  "swap-fail",
+  "offline",
+  "slow",
+  "claim-stuck",
+  "claim-expired",
+  "escrow",
+] as const;
+export type Sim = (typeof ALL_SIMS)[number];
 
 export interface FixtureClientOptions {
   sim?: ReadonlySet<Sim>;
@@ -72,8 +83,10 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
   const sim = opts.sim ?? new Set<Sim>();
   const latency = sim.has("slow") ? 60_000 : (opts.latencyMs ?? 250);
   const now = opts.now ?? Date.now;
+  const locked = sim.has("escrow") ? { swappable: false as const } : {};
+  const seed = (g: PublicGift): PublicGift => (g.status === "opened" ? { ...clone(g), ...locked } : clone(g));
   const store = new Map<string, Entry>(
-    Object.values(fixtures).map((g) => [g.id, { gift: clone(g), secret: secretOf(g), claimPolls: 0 }]),
+    Object.values(fixtures).map((g) => [g.id, { gift: seed(g), secret: secretOf(g), claimPolls: 0 }]),
   );
 
   async function respond<T>(fn: () => T): Promise<T> {
@@ -150,6 +163,7 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
           tokenRaw,
           openedAt: new Date(now()).toISOString(),
           value,
+          ...locked,
         };
         return e.gift;
       }),
@@ -172,6 +186,7 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
         auth(token);
         const e = entry(id);
         const g = e.gift;
+        if (sim.has("claim-expired")) throw new GiftClientError("expired", "This gift has expired");
         if (sim.has("claim-fail")) {
           throw new GiftClientError("chain_unavailable", "Devnet didn't accept the transfer");
         }

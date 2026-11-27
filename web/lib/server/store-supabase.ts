@@ -8,22 +8,23 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { GiftStore, PriceRecord } from "./store";
 import { rowToGift } from "./store-sql";
 
-const COLS =
-  "id,status,sender_name,recipient_name,ticker,usd_cents,price_cents,token_raw:token_raw::text,note,opens_at," +
-  "claim_token_hash,recipient_wallet,claim_signature,claim_last_valid_height:claim_last_valid_height::text," +
-  "created_at,opened_at,claimed_at";
-
 /**
- * `escrow` also reads and writes escrow_account. Without it no query mentions
- * the column, so a database that lacks the escrow migration keeps working.
+ * `*` rather than a column list: escrow_account is read wherever the column
+ * exists, however this server is configured (an escrow gift mistaken for a
+ * treasury gift would be paid twice), and a database without the escrow
+ * migration keeps working. The aliases keep numeric and bigint as text.
  */
-export function createSupabaseGiftStore(sb: SupabaseClient, { escrow = false } = {}): GiftStore {
-  const cols = escrow ? `${COLS},escrow_account` : COLS;
+const COLS = "*,token_raw_text:token_raw::text,claim_last_valid_height_text:claim_last_valid_height::text";
+
+const toGift = (r: Record<string, unknown>) =>
+  rowToGift({ ...r, token_raw: r.token_raw_text, claim_last_valid_height: r.claim_last_valid_height_text });
+
+export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
   const single = async (q: PromiseLike<{ data: unknown; error: { message: string } | null }>) => {
     const { data, error } = await q;
     if (error) throw new Error(`database error: ${error.message}`);
     const rows = (data ?? []) as Record<string, unknown>[];
-    return rows[0] ? rowToGift(rows[0]) : null;
+    return rows[0] ? toGift(rows[0]) : null;
   };
   const gifts = () => sb.from("gifts");
   return {
@@ -44,29 +45,29 @@ export function createSupabaseGiftStore(sb: SupabaseClient, { escrow = false } =
             created_at: g.createdAt,
             ...(g.escrowAccount ? { id: g.id, escrow_account: g.escrowAccount } : {}),
           })
-          .select(cols),
+          .select(COLS),
       );
       if (!r) throw new Error("insert returned no row");
       return r;
     },
-    get: (id) => single(gifts().select(cols).eq("id", id).limit(1)),
-    open: (id, at) => single(gifts().update({ status: "opened", opened_at: at }).eq("id", id).eq("status", "wrapped").select(cols)),
+    get: (id) => single(gifts().select(COLS).eq("id", id).limit(1)),
+    open: (id, at) => single(gifts().update({ status: "opened", opened_at: at }).eq("id", id).eq("status", "wrapped").select(COLS)),
     swap: (id, n) =>
       single(
         gifts()
           .update({ ticker: n.ticker, price_cents: n.priceCents, token_raw: n.tokenRaw })
           .eq("id", id)
           .eq("status", "opened")
-          .select(cols),
+          .select(COLS),
       ),
     beginClaim: (id, wallet) =>
-      single(gifts().update({ status: "claiming", recipient_wallet: wallet }).eq("id", id).eq("status", "opened").select(cols)),
+      single(gifts().update({ status: "claiming", recipient_wallet: wallet }).eq("id", id).eq("status", "opened").select(COLS)),
     setClaimTx: (id, expected, sig, height) => {
       const q = gifts()
         .update({ claim_signature: sig, claim_last_valid_height: height.toString() })
         .eq("id", id)
         .eq("status", "claiming");
-      return single((expected === null ? q.is("claim_signature", null) : q.eq("claim_signature", expected)).select(cols));
+      return single((expected === null ? q.is("claim_signature", null) : q.eq("claim_signature", expected)).select(COLS));
     },
     markClaimed: (id, sig, at) =>
       single(
@@ -75,7 +76,7 @@ export function createSupabaseGiftStore(sb: SupabaseClient, { escrow = false } =
           .eq("id", id)
           .eq("status", "claiming")
           .eq("claim_signature", sig)
-          .select(cols),
+          .select(COLS),
       ),
     async countCreatedSince(since) {
       const { count, error } = await gifts().select("id", { count: "exact", head: true }).gte("created_at", since);

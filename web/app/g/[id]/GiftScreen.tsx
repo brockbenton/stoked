@@ -17,7 +17,8 @@ type Claim =
   | { k: "idle" }
   | { k: "sending" }
   | { k: "pending"; stuck: boolean }
-  | { k: "failed"; message: string };
+  | { k: "failed"; message: string }
+  | { k: "expired" };
 
 const UNWRAP_MS = 1200;
 const REDUCED_MS = 250;
@@ -166,7 +167,12 @@ export function GiftScreen({ id }: { id: string }) {
             void finishClaim(res.gift);
             return;
           }
-        } catch {
+        } catch (e) {
+          if (codeOf(e) === "expired") {
+            polling.current = false;
+            if (!cancelled) setClaim({ k: "expired" });
+            return;
+          }
           // keep trying; the claim is safe server-side
         }
       }
@@ -230,6 +236,14 @@ export function GiftScreen({ id }: { id: string }) {
           message:
             "This browser couldn't create a wallet. Open your link in an up-to-date browser, outside private mode. Nothing was sent.",
         });
+        return;
+      }
+      if (code === "expired") {
+        setClaim({ k: "expired" });
+        return;
+      }
+      if (code === "too_early") {
+        setClaim({ k: "failed", message: "It hasn't opened on Solana yet. Wait a moment and try again. Nothing was sent." });
         return;
       }
       if (code === "validation_failed" || code === "invalid_wallet" || code === "unauthorized" || code === "forbidden") {
@@ -536,7 +550,7 @@ function Reveal({
               {claim.k === "sending" ? "Claiming…" : "Claim to my wallet"}
             </button>
           )}
-          {gift.status === "opened" && claim.k !== "pending" && (
+          {gift.status === "opened" && gift.swappable !== false && claim.k !== "pending" && claim.k !== "expired" && (
             <button
               type="button"
               ref={swapBtn}
@@ -559,7 +573,7 @@ function ClaimStatusPanel({ claim, onRetry }: { claim: Claim; onRetry: () => voi
   const key = claim.k === "pending" ? `pending-${claim.stuck}` : claim.k;
   useEffect(() => {
     // The claim button is replaced by this panel; move focus here so it isn't lost.
-    if (ref.current && (key.startsWith("pending") || key === "failed")) ref.current.focus();
+    if (ref.current && (key.startsWith("pending") || key === "failed" || key === "expired")) ref.current.focus();
   }, [key]);
   if (claim.k === "pending") {
     return (
@@ -579,6 +593,15 @@ function ClaimStatusPanel({ claim, onRetry }: { claim: Claim; onRetry: () => voi
             seconds.
           </p>
         )}
+      </div>
+    );
+  }
+  if (claim.k === "expired") {
+    return (
+      <div className="notice notice--error" role="alert" tabIndex={-1} ref={ref}>
+        <p>
+          <strong>This gift has expired.</strong> It wasn&rsquo;t claimed in time, so it can&rsquo;t be sent any more.
+        </p>
       </div>
     );
   }

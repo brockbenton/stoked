@@ -22,6 +22,7 @@ import {
   CreateGiftRequest,
   DEMO_PRICES_CENTS,
   DEMO_PRICE_SOURCE,
+  MAX_OPENS_AHEAD_MS,
   OpenGiftRequest,
   PublicGift,
   SwapGiftRequest,
@@ -47,14 +48,16 @@ import { hashToken, newClaimToken, tokenMatches } from "./tokens";
 
 /** How long after the later of creation and opensAt an escrow gift can be claimed. */
 export const ESCROW_TTL_SECONDS = 30 * 86_400;
-/** Escrow gifts lock tokens at creation, so opensAt can't be arbitrarily far off. */
-export const ESCROW_MAX_OPENS_AHEAD_MS = 365 * 86_400_000;
+/** Time allowed to create an escrow gift: the web client gives up after 20 seconds. */
+export const ESCROW_CREATE_TIMEOUT_MS = 15_000;
 
 export interface EscrowDeps {
   adapter: EscrowAdapter;
   /** The STOKED_ESCROW flag, for new gifts only: each gift keeps the mode it was created with. */
   createGifts: boolean;
-  /** Status checks to wait for the locking transaction before failing the request. */
+  /** Overrides ESCROW_CREATE_TIMEOUT_MS. */
+  createTimeoutMs?: number;
+  /** Also stop waiting for the lock after this many status checks. */
   createConfirmPolls?: number;
 }
 
@@ -91,6 +94,19 @@ function parseRequest<T>(schema: RequestSchema<T>, body: unknown): T {
 function logError(what: string, err: unknown): void {
   const e = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   console.error(`[stoked] ${what} failed: ${e.slice(0, 500)}`);
+}
+
+/** `promise`, or a rejection once `ms` has passed. The work itself isn't cancelled. */
+async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timed out")), Math.max(0, ms));
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export interface ClaimResult {
@@ -195,7 +211,10 @@ export function createGiftService(deps: ServiceDeps) {
       openedAt: g.openedAt,
       value: await value(g),
     };
-    if (g.status === "opened") return PublicGift.parse({ ...base, ...contents, status: "opened" });
+    if (g.status === "opened") {
+      const locked = g.escrowAccount ? { swappable: false } : {};
+      return PublicGift.parse({ ...base, ...contents, ...locked, status: "opened" });
+    }
     if (g.status === "claiming") {
       return PublicGift.parse({
         ...base,
@@ -258,7 +277,8 @@ export function createGiftService(deps: ServiceDeps) {
   }
 
   /** Insert an escrow gift and lock its tokens; succeeds only once the lock is confirmed. */
-  async function createLocked(escrow: EscrowDeps, gift: NewGift, claimToken: string): Promise<string> {
+  async function createLocked(escrow: EscrowDeps, gift: NewGift, claimToken: string, deadline: number): Promise<string> {
+    const left = () => deadline - Date.now();
     const id = randomUUID();
     const openAt = gift.opensAt ? Math.ceil(Date.parse(gift.opensAt) / 1000) : 0;
     const unavailable = (what: string, err: unknown) => {
@@ -267,28 +287,36 @@ export function createGiftService(deps: ServiceDeps) {
     };
     let lock: SignedClaim & { account: string };
     try {
-      lock = await escrow.adapter.buildCreate({
-        giftId: id,
-        claimToken,
-        ticker: gift.ticker,
-        raw: BigInt(gift.tokenRaw),
-        openAt,
-        expiresAt: Math.max(nowSeconds(), openAt) + ESCROW_TTL_SECONDS,
-      });
+      lock = await within(
+        escrow.adapter.buildCreate({
+          giftId: id,
+          claimToken,
+          ticker: gift.ticker,
+          raw: BigInt(gift.tokenRaw),
+          openAt,
+          expiresAt: Math.max(nowSeconds(), openAt) + ESCROW_TTL_SECONDS,
+        }),
+        left(),
+      );
     } catch (err) {
       throw unavailable("build escrow gift", err);
     }
     // The row is written first, so tokens never lock without a record of where.
     await store.insert({ ...gift, id, escrowAccount: lock.account });
     try {
-      await chain.sendClaim(lock);
+      await within(chain.sendClaim(lock), left());
     } catch (err) {
       throw unavailable(`send escrow gift ${id}`, err);
     }
     let state: ClaimStatus["state"] = "pending";
-    for (let i = 0; i < (escrow.createConfirmPolls ?? 24) && state === "pending"; i++) {
-      if (i > 0) await sleep(confirmIntervalMs);
-      state = (await statusOf({ signature: lock.signature, lastValidBlockHeight: lock.lastValidBlockHeight })).state;
+    const polls = escrow.createConfirmPolls ?? Number.POSITIVE_INFINITY;
+    for (let i = 0; i < polls && state === "pending" && left() > 0; i++) {
+      if (i > 0) await sleep(Math.min(confirmIntervalMs, Math.max(0, left())));
+      const sent = { signature: lock.signature, lastValidBlockHeight: lock.lastValidBlockHeight };
+      state = await within(statusOf(sent), left()).then(
+        (s) => s.state,
+        () => "pending" as const,
+      );
     }
     // Unconfirmed: the token is never returned. If the lock lands late, only a refund can move it.
     if (state !== "confirmed") throw unavailable(`confirm escrow gift ${id}`, new Error(`transaction ${state}`));
@@ -322,7 +350,9 @@ export function createGiftService(deps: ServiceDeps) {
       if (gift.recipient !== wallet) throw invalidState("This gift was already claimed to a different wallet");
       return gift;
     }
-    if (gift.status === "refunded" || clusterTime >= gift.expiresAt) throw invalidState("This gift has expired");
+    if (gift.status === "refunded" || clusterTime >= gift.expiresAt) {
+      throw new ApiError("expired", "This gift has expired");
+    }
     if (clusterTime < gift.openAt) {
       throw new ApiError("too_early", "This gift hasn't opened on Solana yet; try again in a moment");
     }
@@ -413,12 +443,13 @@ export function createGiftService(deps: ServiceDeps) {
 
   return {
     async create(body: unknown, clientKey: string): Promise<CreateGiftResponse> {
+      const started = Date.now();
       const req = parseRequest(CreateGiftRequest, body);
       if (req.opensAt && Date.parse(req.opensAt) <= now().getTime()) {
         throw new ApiError("validation_failed", "opensAt must be in the future");
       }
       const locks = deps.escrow?.createGifts ? deps.escrow : undefined;
-      if (locks && req.opensAt && Date.parse(req.opensAt) > now().getTime() + ESCROW_MAX_OPENS_AHEAD_MS) {
+      if (locks && req.opensAt && Date.parse(req.opensAt) > now().getTime() + MAX_OPENS_AHEAD_MS) {
         throw new ApiError("validation_failed", "opensAt can be at most 365 days ahead");
       }
       if (!rateLimiter.take(clientKey)) throw new ApiError("rate_limited", "Too many gifts; try again in a minute");
@@ -443,7 +474,9 @@ export function createGiftService(deps: ServiceDeps) {
         claimTokenHash: hashToken(token),
         createdAt: now().toISOString(),
       };
-      const id = locks ? await createLocked(locks, gift, token) : (await store.insert(gift)).id;
+      const id = locks
+        ? await createLocked(locks, gift, token, started + (locks.createTimeoutMs ?? ESCROW_CREATE_TIMEOUT_MS))
+        : (await store.insert(gift)).id;
       return { id, claimToken: token };
     },
 

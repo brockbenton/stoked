@@ -107,6 +107,35 @@ class FakeEscrow implements EscrowAdapter {
   }
 }
 
+/** Records query arguments. A select returns escrow_account only if it asks for it, as PostgREST would. */
+function fakeSupabase(row: Record<string, unknown> | null) {
+  const seen: string[] = [];
+  const from = () => {
+    let cols: string[] = [];
+    const rows = () => {
+      if (!row) return [];
+      const copy = { ...row };
+      if (!cols.includes("*") && !cols.includes("escrow_account")) delete copy.escrow_account;
+      return [copy];
+    };
+    const builder: object = new Proxy(
+      {},
+      {
+        get: (_, name) =>
+          name === "then"
+            ? (done: (v: unknown) => void) => done({ data: rows(), error: null, count: 0 })
+            : (...args: unknown[]) => {
+                if (name === "select") cols = String(args[0]).split(",");
+                seen.push(JSON.stringify(args));
+                return builder;
+              },
+      },
+    );
+    return builder;
+  };
+  return { sb: { from } as unknown as SupabaseClient, seen };
+}
+
 // One database for the file, emptied per test: starting PGlite is slow.
 let db: PGlite;
 beforeAll(async () => {
@@ -151,6 +180,7 @@ describe("escrow flag off (the default)", () => {
     const g = await openedGift(c);
     expect((await c.store.get(g.id))!.escrowAccount).toBeNull();
     await c.service.swap(g.id, g.token, { ticker: "tAAPL" });
+    expect(await c.service.get(g.id)).not.toHaveProperty("swappable");
     expect((await claim(c, g)).httpStatus).toBe(200);
     expect(c.chain.transfers).toHaveLength(1);
     expect(c.escrow.gifts.size).toBe(0);
@@ -168,34 +198,60 @@ describe("escrow flag off (the default)", () => {
     expect(() => escrowSettings({ ESCROW_PROGRAM_ID: "nope" })).toThrow(/ESCROW_PROGRAM_ID/);
   });
 
-  it("never mentions the new column to Supabase unless escrow is configured", async () => {
-    const queries = async (escrow: boolean) => {
-      const seen: string[] = [];
-      const builder: object = new Proxy(
-        {},
-        {
-          get: (_, name) =>
-            name === "then"
-              ? (done: (v: unknown) => void) => done({ data: [], error: null, count: 0 })
-              : (...args: unknown[]) => {
-                  seen.push(JSON.stringify(args));
-                  return builder;
-                },
-        },
-      );
-      const store = createSupabaseGiftStore({ from: () => builder } as unknown as SupabaseClient, { escrow });
-      await store.get("id");
-      await store.open("id", "t");
-      await store.swap("id", { ticker: "tAAPL", priceCents: 1, tokenRaw: "1" });
-      await store.beginClaim("id", "w");
-      await store.setClaimTx("id", null, "s", 1n);
-      await store.markClaimed("id", "s", "t");
-      await store.countCreatedSince("t");
-      await store.insert({ ...({} as Parameters<typeof store.insert>[0]) }).catch(() => undefined);
-      return seen.join("\n");
-    };
-    expect(await queries(false)).not.toContain("escrow");
-    expect((await queries(true)).match(/escrow_account/g)!.length).toBe(7);
+  it("names the new column to Supabase only when inserting an escrow gift", async () => {
+    const { sb, seen } = fakeSupabase(null);
+    const store = createSupabaseGiftStore(sb);
+    await store.get("id");
+    await store.open("id", "t");
+    await store.swap("id", { ticker: "tAAPL", priceCents: 1, tokenRaw: "1" });
+    await store.beginClaim("id", "w");
+    await store.setClaimTx("id", null, "s", 1n);
+    await store.markClaimed("id", "s", "t");
+    await store.countCreatedSince("t");
+    const insert = (g: object) =>
+      store.insert(g as Parameters<typeof store.insert>[0]).catch(() => undefined);
+    await insert({});
+    // So a database without the escrow migration keeps working.
+    expect(seen.join("\n")).not.toContain("escrow");
+    await insert({ id: "id", escrowAccount: "account" });
+    expect(seen.join("\n")).toContain('"escrow_account":"account"');
+  });
+
+  it("recognises an escrow gift in Supabase, and won't pay it, with no escrow settings at all", async () => {
+    const token = "t".repeat(40);
+    const { sb } = fakeSupabase({
+      id: "00000000-0000-4000-8000-000000000001",
+      status: "opened",
+      sender_name: "Alex",
+      recipient_name: "Maya",
+      ticker: "tNVDA",
+      usd_cents: 1000,
+      price_cents: 22952,
+      token_raw: 4356918,
+      token_raw_text: "4356918",
+      note: null,
+      opens_at: null,
+      claim_token_hash: hashToken(token),
+      recipient_wallet: null,
+      claim_signature: null,
+      claim_last_valid_height: null,
+      claim_last_valid_height_text: null,
+      created_at: NOW.toISOString(),
+      opened_at: NOW.toISOString(),
+      claimed_at: null,
+      escrow_account: "account",
+    });
+    const chain = new FakeChain();
+    const service = createGiftService({
+      store: createSupabaseGiftStore(sb),
+      chain,
+      rateLimiter: createRateLimiter({ perKey: 10, global: 10, windowMs: 60_000 }),
+      now: () => NOW,
+    });
+    const id = "00000000-0000-4000-8000-000000000001";
+    await expect(service.claim(id, token, { wallet: VALID_WALLET })).rejects.toMatchObject({ code: "internal" });
+    await expect(service.swap(id, token, { ticker: "tAAPL" })).rejects.toMatchObject({ code: "invalid_state" });
+    expect(chain.transfers).toHaveLength(0);
   });
 });
 
@@ -248,11 +304,32 @@ describe("escrow flag on", () => {
     expect(c.escrow.gifts.size).toBe(0);
   });
 
+  it("gives up on an unconfirmed lock when its time is up, however slow the RPC", async () => {
+    const c = await withEscrow();
+    const quick = createGiftService({
+      ...c.deps,
+      confirmIntervalMs: 5,
+      escrow: { adapter: c.escrow, createGifts: true, createTimeoutMs: 200 },
+    });
+    const gaveUp = async () => {
+      const started = Date.now();
+      await expect(quick.create(giftReq(), "ip")).rejects.toMatchObject({ code: "chain_unavailable" });
+      expect(Date.now() - started).toBeLessThan(2_000);
+    };
+    c.chain.landOnSend = false; // always pending
+    await gaveUp();
+    c.chain.claimStatus = () => new Promise(() => undefined); // a status call that never returns
+    await gaveUp();
+    c.chain.sendClaim = () => new Promise(() => undefined);
+    await gaveUp();
+  });
+
   it("refuses a swap, leaving the gift as locked", async () => {
     const c = await withEscrow();
     const g = await openedGift(c);
     await expect(c.service.swap(g.id, g.token, { ticker: "tAAPL" })).rejects.toMatchObject({ code: "invalid_state" });
     expect((await c.store.get(g.id))!.ticker).toBe("tNVDA");
+    expect(await c.service.get(g.id)).toMatchObject({ status: "opened", swappable: false });
   });
 
   it("claims through the program, never the treasury, and only once", async () => {
@@ -337,10 +414,10 @@ describe("escrow flag on", () => {
     await refused("too_early");
     chainGift.openAt = 0;
     c.escrow.clusterTime = chainGift.expiresAt;
-    await refused("invalid_state");
+    await refused("expired");
     c.escrow.clusterTime = NOW_SECONDS;
     chainGift.status = "refunded";
-    await refused("invalid_state");
+    await refused("expired");
     chainGift.status = "claimed";
     chainGift.recipient = OTHER_WALLET;
     await refused("invalid_state");
@@ -363,7 +440,7 @@ describe("escrow flag on", () => {
     c.escrow.clusterTime = c.escrow.only().expiresAt;
     c.chain.advance(c.chain.validFor + 1n);
     const sent = c.chain.sent.length;
-    await expect(claim(c, g)).rejects.toMatchObject({ code: "invalid_state" });
+    await expect(claim(c, g)).rejects.toMatchObject({ code: "expired" });
     expect(c.chain.sent).toHaveLength(sent);
   });
 });

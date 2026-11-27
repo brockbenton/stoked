@@ -106,9 +106,9 @@ The on-chain `gift_id` is random and unrelated to the database id. The database 
 | Open | Server clock | Same, and the chain enforces the time again at claim |
 | Swap | Allowed while opened | **Refused (409 `invalid_state`)** for escrow gifts: the mint and amount are locked |
 | Claim | Treasury `transferChecked` | Program `claim`, signed by the claim key, fees paid by the treasury |
-| Expiry | None | After 30 days: claim answers 409, and the treasury can refund |
+| Expiry | None | After 30 days: claim answers 410 `expired`, and the treasury can refund |
 
-The mode is fixed per gift at creation. Turning the flag off stops new escrow gifts; existing ones still claim through the program, and old treasury gifts still swap and claim as before. The web UI isn't changed: on an escrow gift the swap button is still shown, and choosing a stock reports that the gift can't be swapped.
+The mode is fixed per gift at creation. Turning the flag off stops new escrow gifts; existing ones still claim through the program, and old treasury gifts still swap and claim as before. The opened gift is marked `swappable: false`, and the web app hides the swap button.
 
 Swapping stays off because the program has no way to take tokens back before expiry. Adding one would give the sender an early exit from the vault.
 
@@ -119,7 +119,9 @@ Swapping stays off because the program has no way to take tokens back before exp
 | `ESCROW_PROGRAM_ID` | The deployed program. Set it to enable the escrow code at all, and **keep it set while any escrow gift exists** |
 | `STOKED_ESCROW` | `1` makes new gifts escrow gifts. Requires `ESCROW_PROGRAM_ID` |
 
-Order: apply `supabase/migrations/20261127000000_escrow.sql`, deploy the program, then set the variables. With `ESCROW_PROGRAM_ID` unset the Supabase queries don't mention the new column, so the code runs on a database without the migration. The catch: unsetting it after escrow gifts exist would make the server treat them as treasury gifts, paying from the treasury while the vault stays claimable by whoever has the link.
+Order: merge and let production deploy this code, apply `supabase/migrations/20261127000000_escrow.sql`, deploy the program, then set the variables.
+
+The server reads whole rows, so it runs on a database without the migration and still recognises an escrow gift when `ESCROW_PROGRAM_ID` is unset: it refuses to claim or swap it. **Code from before escrow does not.** It would pay an escrow gift from the treasury while the vault stays claimable by whoever has the link. Every deployment that shares the database (Preview and Production do today) must therefore run this code before the first escrow gift is created, and production must never be rolled back past it while escrow gifts exist.
 
 ## Never pay twice
 
@@ -131,7 +133,7 @@ Before binding a wallet, and before building any claim transaction, the server r
 |---|---|
 | Open, inside the window | Build, store the signature, send (steps 2 to 4) |
 | Open, cluster time before `open_at` | 425 `too_early`; retry |
-| Open, at or past `expires_at`, or refunded | 409 `invalid_state` |
+| Open, at or past `expires_at`, or refunded | 410 `expired` |
 | Claimed to the bound wallet | Find the successful claim transaction, store it, mark claimed |
 | Claimed to another wallet | 409 `invalid_state` |
 | No account, or the RPC fails | 503 `chain_unavailable`; nothing changes |
@@ -145,7 +147,7 @@ Before binding a wallet, and before building any claim transaction, the server r
 | A replaced transaction lands after all | The vault is already empty, so only one can ever succeed; the gift account says who was paid |
 | Concurrent retries | One stores its signature; the others are discarded unsent |
 
-Creation: build and sign `create_gift`, insert the row with the escrow address, send, wait for confirmation. If it doesn't confirm after 24 status checks half a second apart (about 15 seconds, inside the web client's 20-second timeout), the request fails and the claim token is never returned. If that transaction lands later, the tokens sit in a vault nobody can claim until the treasury refunds it after expiry. Nothing is paid out twice.
+Creation: build and sign `create_gift`, insert the row with the escrow address, send, wait for confirmation. If it hasn't confirmed 15 seconds after the request arrived (the web client gives up at 20), the request fails and the claim token is never returned. If that transaction lands later, the tokens sit in a vault nobody can claim until the treasury refunds it after expiry. Nothing is paid out twice.
 
 ## Threat model
 
@@ -181,7 +183,7 @@ The upgrade authority is set by whoever deploys the program. This work doesn't c
 - **The surprise is public on chain.** The app hides a wrapped gift's ticker and amount; the chain doesn't. The on-chain id isn't derived from the link, but the treasury's history lists every gift, and creation times can be matched.
 - **Spam costs the treasury SOL.** Each creation pays rent before anyone opens the gift: 0.00214 SOL for the gift account and 0.00204 SOL for the vault (measured with `solana rent` on a local validator; a claim to a new wallet adds a token account). The vault's rent returns on claim or refund; the gift account's rent is never reclaimed (there is no close instruction). The existing creation rate limits apply.
 - **Creation is slower** and can fail after the tokens were sent (a timed-out confirmation or request). The sender retries and the first gift's tokens stay locked until refunded. A host that cuts requests off sooner than about 15 seconds would make this more likely.
-- **A refund is manual.** Nothing runs on a timer: `pnpm --filter @stoked/chain escrow:refund` refunds expired gifts. The app has no expired state; the card stays as it was and claiming reports that the gift expired.
+- **A refund is manual.** Nothing runs on a timer: `pnpm --filter @stoked/chain escrow:refund` refunds expired gifts. There is no expired status: the card stays as it was (the sender of a half-claimed gift still sees it as on its way), and the recipient is told it expired on trying to claim.
 - **A claim made outside the app** to a different wallet than the app bound leaves the database row in `claiming`.
 - **Cluster time** can drift from wall-clock time. A claim right at `open_at` may be told to retry.
 - **`findClaimSignature` reads the latest 100 transactions** that mention a gift account. Flooding one with unrelated transactions could keep a claim made outside the stored transaction at 202; no funds are affected.

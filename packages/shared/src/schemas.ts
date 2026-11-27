@@ -53,6 +53,7 @@ export const ERROR_STATUS = {
   not_found: 404,
   invalid_state: 409,
   too_early: 425,
+  expired: 410,
   rate_limited: 429,
   internal: 500,
   chain_unavailable: 503,
@@ -69,6 +70,9 @@ export const ApiError = z.strictObject({
 export type ApiError = z.infer<typeof ApiError>;
 
 // ---------- requests ----------
+
+/** How far ahead a gift can be set to open. Escrow gifts lock tokens at creation, so the server enforces it for them. */
+export const MAX_OPENS_AHEAD_MS = 365 * 86_400_000;
 
 /** POST /api/gifts */
 export const CreateGiftRequest = z.strictObject({
@@ -132,7 +136,13 @@ const contents = {
 };
 
 export const PublicGiftWrapped = z.strictObject({ ...base, status: z.literal("wrapped") });
-export const PublicGiftOpened = z.strictObject({ ...base, ...contents, status: z.literal("opened") });
+export const PublicGiftOpened = z.strictObject({
+  ...base,
+  ...contents,
+  status: z.literal("opened"),
+  /** Present, and false, only when the gift can't be swapped (its tokens are locked in escrow). */
+  swappable: z.literal(false).optional(),
+});
 export const PublicGiftClaiming = z.strictObject({
   ...base,
   ...contents,

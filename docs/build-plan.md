@@ -125,7 +125,7 @@ The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; thi
   - `opened` and later: `ticker, usdCents, note, tokenRaw, openedAt, value{priceCents, priceSource, priceUpdatedAt, multiplier, shares, valueCents}`.
   - `claiming`: `recipientWallet, claimSignature|null`. `claimed`: `recipientWallet, claimSignature, claimedAt`.
 - **Claim response:** 200 `{status:"claimed", signature, gift}`; 202 `{status:"pending", signature|null, gift}`.
-- **Error codes → HTTP:** `bad_request`, `validation_failed`, `invalid_wallet` 400; `unauthorized` 401; `forbidden` 403; `not_found` 404; `invalid_state` 409; `too_early` 425; `rate_limited` 429; `internal` 500; `chain_unavailable` 503.
+- **Error codes → HTTP:** `bad_request`, `validation_failed`, `invalid_wallet` 400; `unauthorized` 401; `forbidden` 403; `not_found` 404; `invalid_state` 409; `expired` 410 (escrow gifts only); `too_early` 425; `rate_limited` 429; `internal` 500; `chain_unavailable` 503.
 
 ### Claim must never pay twice
 
@@ -143,10 +143,10 @@ A pending claim moves forward only when the claim request is sent again, so the 
 
 Off by default. `ESCROW_PROGRAM_ID` enables the code; `STOKED_ESCROW=1` makes new gifts lock their tokens in the [escrow program](escrow.md) at creation. A gift keeps the mode it was created with. For an escrow gift:
 
-- **Create:** the link is returned only once the locking transaction confirms (otherwise 503 `chain_unavailable`); `opensAt` more than 365 days ahead is 400 `validation_failed`; the gift expires 30 days after the later of creation and `opensAt`.
-- **Swap:** 409 `invalid_state`.
-- **Claim:** the same five steps, with the program's `claim` (signed by a key derived from the claim token) in place of the treasury transfer. The server reads the gift on chain before binding a wallet and before building: not yet open by cluster time → 425 `too_early`; expired, refunded or claimed to another wallet → 409 `invalid_state`; already claimed to the bound wallet → record that transaction and answer claimed.
-- **Expiry:** there is no expired status. `pnpm --filter @stoked/chain escrow:refund` returns expired gifts to the treasury.
+- **Create:** the link is returned only once the locking transaction confirms (otherwise 503 `chain_unavailable`, within 15 seconds); `opensAt` more than 365 days ahead is 400 `validation_failed` (the web form refuses such dates for every gift); the gift expires 30 days after the later of creation and `opensAt`.
+- **Swap:** 409 `invalid_state`. The opened gift carries `swappable: false` (absent otherwise) and the web app hides the button.
+- **Claim:** the same five steps, with the program's `claim` (signed by a key derived from the claim token) in place of the treasury transfer. The server reads the gift on chain before binding a wallet and before building: not yet open by cluster time → 425 `too_early`; expired or refunded → 410 `expired`; claimed to another wallet → 409 `invalid_state`; already claimed to the bound wallet → record that transaction and answer claimed.
+- **Expiry:** there is no expired status; claiming answers 410 and the gift screen says it expired. `pnpm --filter @stoked/chain escrow:refund` returns expired gifts to the treasury.
 
 ### Running locally
 

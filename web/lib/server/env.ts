@@ -62,7 +62,7 @@ export function escrowSettings(env: Record<string, string | undefined>) {
   }
 }
 
-function giftStore(escrow: boolean): GiftStore {
+function giftStore(): GiftStore {
   if (process.env.STOKED_LOCAL_DB === "1") {
     if (!localDbAllowed(process.env)) {
       throw new ApiError("internal", "STOKED_LOCAL_DB only works with a local validator");
@@ -72,7 +72,7 @@ function giftStore(escrow: boolean): GiftStore {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new ApiError("internal", "Server is missing its database configuration");
-  return createSupabaseGiftStore(createClient(url, key, { auth: { persistSession: false } }), { escrow });
+  return createSupabaseGiftStore(createClient(url, key, { auth: { persistSession: false } }));
 }
 
 /** Test knob, honored only with the local database: 0 makes every claim answer 202 first. */
@@ -85,7 +85,7 @@ function localConfirmPolls(): number | undefined {
 export function getService(): GiftService {
   if (service) return service;
   const escrow = escrowSettings(process.env);
-  const store = giftStore(escrow !== undefined);
+  const store = giftStore();
   const config = chainConfig();
   service = createGiftService({
     store,
