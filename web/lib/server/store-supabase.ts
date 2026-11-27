@@ -13,7 +13,12 @@ const COLS =
   "claim_token_hash,recipient_wallet,claim_signature,claim_last_valid_height:claim_last_valid_height::text," +
   "created_at,opened_at,claimed_at";
 
-export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
+/**
+ * `escrow` also reads and writes escrow_account. Without it no query mentions
+ * the column, so a database that lacks the escrow migration keeps working.
+ */
+export function createSupabaseGiftStore(sb: SupabaseClient, { escrow = false } = {}): GiftStore {
+  const cols = escrow ? `${COLS},escrow_account` : COLS;
   const single = async (q: PromiseLike<{ data: unknown; error: { message: string } | null }>) => {
     const { data, error } = await q;
     if (error) throw new Error(`database error: ${error.message}`);
@@ -37,30 +42,31 @@ export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
             opens_at: g.opensAt,
             claim_token_hash: g.claimTokenHash,
             created_at: g.createdAt,
+            ...(g.escrowAccount ? { id: g.id, escrow_account: g.escrowAccount } : {}),
           })
-          .select(COLS),
+          .select(cols),
       );
       if (!r) throw new Error("insert returned no row");
       return r;
     },
-    get: (id) => single(gifts().select(COLS).eq("id", id).limit(1)),
-    open: (id, at) => single(gifts().update({ status: "opened", opened_at: at }).eq("id", id).eq("status", "wrapped").select(COLS)),
+    get: (id) => single(gifts().select(cols).eq("id", id).limit(1)),
+    open: (id, at) => single(gifts().update({ status: "opened", opened_at: at }).eq("id", id).eq("status", "wrapped").select(cols)),
     swap: (id, n) =>
       single(
         gifts()
           .update({ ticker: n.ticker, price_cents: n.priceCents, token_raw: n.tokenRaw })
           .eq("id", id)
           .eq("status", "opened")
-          .select(COLS),
+          .select(cols),
       ),
     beginClaim: (id, wallet) =>
-      single(gifts().update({ status: "claiming", recipient_wallet: wallet }).eq("id", id).eq("status", "opened").select(COLS)),
+      single(gifts().update({ status: "claiming", recipient_wallet: wallet }).eq("id", id).eq("status", "opened").select(cols)),
     setClaimTx: (id, expected, sig, height) => {
       const q = gifts()
         .update({ claim_signature: sig, claim_last_valid_height: height.toString() })
         .eq("id", id)
         .eq("status", "claiming");
-      return single((expected === null ? q.is("claim_signature", null) : q.eq("claim_signature", expected)).select(COLS));
+      return single((expected === null ? q.is("claim_signature", null) : q.eq("claim_signature", expected)).select(cols));
     },
     markClaimed: (id, sig, at) =>
       single(
@@ -69,7 +75,7 @@ export function createSupabaseGiftStore(sb: SupabaseClient): GiftStore {
           .eq("id", id)
           .eq("status", "claiming")
           .eq("claim_signature", sig)
-          .select(COLS),
+          .select(cols),
       ),
     async countCreatedSince(since) {
       const { count, error } = await gifts().select("id", { count: "exact", head: true }).gte("created_at", since);

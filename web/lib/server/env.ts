@@ -4,6 +4,7 @@
  */
 import "server-only";
 import { chainConfigFromEnv, createSolanaChain, getRawHoldings, type SolanaChainOptions } from "@stoked/chain";
+import { createSolanaEscrow } from "@stoked/chain/escrow";
 import { PublicKey } from "@solana/web3.js";
 import { createClient } from "@supabase/supabase-js";
 import { ApiError } from "./errors";
@@ -43,7 +44,25 @@ export function localDbAllowed(env: Record<string, string | undefined>): boolean
   }
 }
 
-function giftStore(): GiftStore {
+/**
+ * Escrow settings (docs/escrow.md). ESCROW_PROGRAM_ID makes the server able to
+ * claim escrow gifts; STOKED_ESCROW=1 also makes new gifts escrow gifts.
+ */
+export function escrowSettings(env: Record<string, string | undefined>) {
+  const createGifts = env.STOKED_ESCROW === "1";
+  const id = env.ESCROW_PROGRAM_ID;
+  if (!id) {
+    if (createGifts) throw new ApiError("internal", "STOKED_ESCROW needs ESCROW_PROGRAM_ID");
+    return undefined;
+  }
+  try {
+    return { programId: new PublicKey(id), createGifts };
+  } catch {
+    throw new ApiError("internal", "ESCROW_PROGRAM_ID isn't a Solana address");
+  }
+}
+
+function giftStore(escrow: boolean): GiftStore {
   if (process.env.STOKED_LOCAL_DB === "1") {
     if (!localDbAllowed(process.env)) {
       throw new ApiError("internal", "STOKED_LOCAL_DB only works with a local validator");
@@ -53,7 +72,7 @@ function giftStore(): GiftStore {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new ApiError("internal", "Server is missing its database configuration");
-  return createSupabaseGiftStore(createClient(url, key, { auth: { persistSession: false } }));
+  return createSupabaseGiftStore(createClient(url, key, { auth: { persistSession: false } }), { escrow });
 }
 
 /** Test knob, honored only with the local database: 0 makes every claim answer 202 first. */
@@ -65,11 +84,16 @@ function localConfirmPolls(): number | undefined {
 
 export function getService(): GiftService {
   if (service) return service;
-  const store = giftStore();
-  const chain = createSolanaChain(chainConfig());
+  const escrow = escrowSettings(process.env);
+  const store = giftStore(escrow !== undefined);
+  const config = chainConfig();
   service = createGiftService({
     store,
-    chain,
+    chain: createSolanaChain(config),
+    escrow: escrow && {
+      adapter: createSolanaEscrow({ ...config, programId: escrow.programId }),
+      createGifts: escrow.createGifts,
+    },
     rateLimiter: createRateLimiter({ perKey: 5, global: 100, windowMs: 60_000 }),
     confirmPolls: localConfirmPolls(),
   });

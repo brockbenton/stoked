@@ -96,6 +96,8 @@ alter table prices enable row level security;
 
 A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes. A second migration grants `service_role` select, insert and update, because Supabase may not grant new tables automatically.
 
+A third migration adds `escrow_account text`: the on-chain account holding an escrow gift's tokens, null for a gift the treasury transfers at claim time. It's set at creation and never changes. The Supabase store reads and writes it only when `ESCROW_PROGRAM_ID` is set.
+
 ## API
 
 JSON. Errors: `{ error: { code, message } }`.
@@ -108,6 +110,8 @@ JSON. Errors: `{ error: { code, message } }`.
 | `POST /api/gifts/:id/swap` | token | `{ticker}`, only while `opened`; same USD value |
 | `POST /api/gifts/:id/claim` | token | `{wallet}`. 200 claimed, 202 pending |
 | `GET /api/wallets/:address` | — | Test token balances of a wallet: `{wallet, holdings: [{ticker, tokenRaw, multiplier, shares, sharesExact}]}`. Public chain data; only non-zero holdings; rate-limited (60 per minute per client IP) |
+
+With escrow on, routes and response shapes are the same; behaviour differs as described under [Escrow](#escrow).
 
 `GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening. "Token" is `Authorization: Bearer <claimToken>`. Rate-limit creation, since it draws down the treasury.
 
@@ -135,6 +139,15 @@ Server code: `web/lib/server` (service with injected `GiftStore`, `ChainAdapter`
 
 A pending claim moves forward only when the claim request is sent again, so the web client repeats it (same wallet) while the gift is `claiming`, including after a reload. `GET` never advances a claim.
 
+### Escrow
+
+Off by default. `ESCROW_PROGRAM_ID` enables the code; `STOKED_ESCROW=1` makes new gifts lock their tokens in the [escrow program](escrow.md) at creation. A gift keeps the mode it was created with. For an escrow gift:
+
+- **Create:** the link is returned only once the locking transaction confirms (otherwise 503 `chain_unavailable`); `opensAt` more than 365 days ahead is 400 `validation_failed`; the gift expires 30 days after the later of creation and `opensAt`.
+- **Swap:** 409 `invalid_state`.
+- **Claim:** the same five steps, with the program's `claim` (signed by a key derived from the claim token) in place of the treasury transfer. The server reads the gift on chain before binding a wallet and before building: not yet open by cluster time → 425 `too_early`; expired, refunded or claimed to another wallet → 409 `invalid_state`; already claimed to the bound wallet → record that transaction and answer claimed.
+- **Expiry:** there is no expired status. `pnpm --filter @stoked/chain escrow:refund` returns expired gifts to the treasury.
+
 ### Running locally
 
 `STOKED_LOCAL_DB=1` swaps Supabase for an in-process PGlite database running the real migration (lost on restart). The server refuses it unless `SOLANA_RPC_URL` is a loopback address, and always on Vercel.
@@ -144,6 +157,7 @@ A pending claim moves forward only when the claim request is sent again, so the 
 | `pnpm test:e2e` | Both browser suites below |
 | `pnpm --filter @stoked/web test:ui` | UI states on fixtures (`NEXT_PUBLIC_STOKED_CLIENT=fixture`, set by the Playwright config) |
 | `pnpm --filter @stoked/web test:flow` | Real API, local database and `solana-test-validator`: send, claim, refresh mid-claim, link preview, token and key leaks |
+| `pnpm test:escrow` | Builds the escrow program, then program tests, the TypeScript client and the API on `solana-test-validator`. Needs the Solana CLI; not run in CI |
 
 ### Who can claim
 
@@ -202,4 +216,4 @@ If the 1:1 gate slips past Saturday noon, cut G8.
 
 ## Stretch decision: escrow
 
-Gift PDA vault holding the tokens, enforcing open time and single claim on-chain, with a hash-locked claim. Design point to settle in G8: the claim must bind the secret to the recipient's address so an observed transaction can't be front-run (use a claim keypair's signature over the claim, not a bare preimage).
+Gift PDA vault holding the tokens, enforcing open time and single claim on-chain. The claim is authorized by a per-gift claim key that signs the claim transaction, which binds the recipient, so an observed transaction can't be front-run and no secret goes on chain. Design, threat model and deploy steps: [escrow.md](escrow.md).

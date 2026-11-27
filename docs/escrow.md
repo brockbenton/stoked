@@ -145,7 +145,7 @@ Before binding a wallet, and before building any claim transaction, the server r
 | A replaced transaction lands after all | The vault is already empty, so only one can ever succeed; the gift account says who was paid |
 | Concurrent retries | One stores its signature; the others are discarded unsent |
 
-Creation: build and sign `create_gift`, insert the row with the escrow address, send, wait for confirmation. If it doesn't confirm in about 20 seconds, the request fails and the claim token is never returned. If that transaction lands later, the tokens sit in a vault nobody can claim until the treasury refunds it after expiry. Nothing is paid out twice.
+Creation: build and sign `create_gift`, insert the row with the escrow address, send, wait for confirmation. If it doesn't confirm after 24 status checks half a second apart (about 15 seconds, inside the web client's 20-second timeout), the request fails and the claim token is never returned. If that transaction lands later, the tokens sit in a vault nobody can claim until the treasury refunds it after expiry. Nothing is paid out twice.
 
 ## Threat model
 
@@ -174,15 +174,18 @@ For a gift that exists on chain, assuming the program isn't upgraded:
 
 The two bold rows are the real trust assumptions. The server generates every claim token and signs every claim, so the escrow doesn't make the app trustless. It narrows what a stolen treasury key or database can do, and lets anyone check on chain that a gift is funded, when it opens and who received it. Client-side token generation and signing would remove the server rows; v1 doesn't do that.
 
-The upgrade authority is whoever deploys the program. This work doesn't change it. A deployment that should be immutable needs the owner to revoke it, which can't be undone.
+The upgrade authority is set by whoever deploys the program. This work doesn't change one. **It must not be the treasury key**: if it were, a leaked treasury key could replace the program and the "leaked treasury key" rows above would be false. A deployment that should be immutable needs the owner to revoke the authority, which can't be undone.
 
 ### Other limits
 
 - **The surprise is public on chain.** The app hides a wrapped gift's ticker and amount; the chain doesn't. The on-chain id isn't derived from the link, but the treasury's history lists every gift, and creation times can be matched.
-- **Spam costs the treasury SOL.** Each creation pays rent for two accounts before anyone opens it. The vault's rent returns on claim or refund; the gift account's rent is never reclaimed (there is no close instruction). The existing creation rate limits apply.
+- **Spam costs the treasury SOL.** Each creation pays rent before anyone opens the gift: 0.00214 SOL for the gift account and 0.00204 SOL for the vault (measured with `solana rent` on a local validator; a claim to a new wallet adds a token account). The vault's rent returns on claim or refund; the gift account's rent is never reclaimed (there is no close instruction). The existing creation rate limits apply.
+- **Creation is slower** and can fail after the tokens were sent (a timed-out confirmation or request). The sender retries and the first gift's tokens stay locked until refunded. A host that cuts requests off sooner than about 15 seconds would make this more likely.
 - **A refund is manual.** Nothing runs on a timer: `pnpm --filter @stoked/chain escrow:refund` refunds expired gifts. The app has no expired state; the card stays as it was and claiming reports that the gift expired.
 - **A claim made outside the app** to a different wallet than the app bound leaves the database row in `claiming`.
 - **Cluster time** can drift from wall-clock time. A claim right at `open_at` may be told to retry.
+- **`findClaimSignature` reads the latest 100 transactions** that mention a gift account. Flooding one with unrelated transactions could keep a claim made outside the stored transaction at 202; no funds are affected.
+- **The devnet smoke test** (`web/e2e-smoke`) expects the claim transaction to debit the treasury, so it fails against a deployment with the flag on until it's taught about vaults.
 - **Not audited.**
 
 ## Tests
@@ -191,8 +194,45 @@ The upgrade authority is whoever deploys the program. This work doesn't change i
 pnpm test:escrow   # build the program, program tests, client and API on solana-test-validator
 ```
 
-Needs the Solana CLI. CI has no Rust or Solana toolchain, so it runs only the TypeScript unit tests, which include the escrow API logic against a fake chain.
+Needs the Solana CLI and Rust. CI has no Rust or Solana toolchain, so it runs only the TypeScript unit tests: the wire format ([`escrow-unit.test.ts`](../packages/chain/test/escrow-unit.test.ts)) and the API against a fake chain ([`escrow.test.ts`](../web/test/server/escrow.test.ts)). The program itself is not checked in CI.
+
+Program tests are in [`programs/escrow/tests/escrow.rs`](../programs/escrow/tests/escrow.rs):
+
+| Required case | Test |
+|---|---|
+| Create and claim | `create_locks_the_amount_in_the_vault`, `create_then_claim_releases_the_exact_amount_and_closes_the_vault` |
+| Early claim | `early_claim_fails_and_succeeds_at_the_open_time` |
+| Double claim | `double_claim_fails`, `status_alone_refuses_a_second_claim_or_refund_even_with_a_funded_vault` |
+| Wrong claim key | `wrong_claim_key_fails`, `another_gifts_claim_key_cannot_claim`, `claim_without_the_claim_key_signature_fails` |
+| Substituted recipient | `substituted_recipient_in_a_signed_claim_fails_signature_verification`, `substituted_recipient_token_account_fails`, `recipient_token_must_be_the_associated_account` |
+| Substituted mint | `substituted_mint_fails` |
+| Substituted vault | `substituted_vault_fails` |
+| Substituted token program | `substituted_token_program_fails` |
+| Replay across gifts | `claim_key_signature_does_not_replay_across_gifts` |
+| Refund before expiry | `refund_before_expiry_fails` |
+| Refund after expiry | `refund_after_expiry_returns_the_tokens_to_the_sender`, `only_the_sender_can_refund_and_only_to_itself` |
+| Claim versus refund ordering | `claim_wins_before_expiry_and_refund_then_fails`, `claim_after_expiry_fails_and_refund_then_blocks_claim` |
+| Raw amount after a multiplier change | `multiplier_change_leaves_the_raw_amount_unchanged` |
+
+On 2026-11-27, removing each of these checks in turn (open time, claim expiry, refund expiry, status, claim key, mint, recipient token account, mint allowlist, full-balance release) made at least one of these tests fail.
 
 ## Deploying to devnet
 
 Needs the owner's approval. Not done yet.
+
+1. **Program keypair.** The program ID `eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB` belongs to a keypair at `programs/escrow/target/deploy/stoked_escrow-keypair.json` in the worktree that built G8. It's gitignored: back it up before removing that worktree, and copy it to the same path in the checkout you deploy from **before** building (otherwise the build creates a different one). If it's lost, generate a new one and update `declare_id!` and `ESCROW_PROGRAM_ID` in `packages/chain/escrow/program.ts`.
+2. **Deployer keypair**, separate from the treasury and never on the server. It becomes the upgrade authority. Fund it on devnet: the program is 238 KB, about 1.66 SOL of rent at local-validator rates, plus fees.
+3. Run `pnpm test:escrow`, then from the repo root:
+
+   ```sh
+   solana program deploy programs/escrow/target/deploy/stoked_escrow.so \
+     --program-id programs/escrow/target/deploy/stoked_escrow-keypair.json \
+     --keypair <deployer.json> --upgrade-authority <deployer.json> --url devnet
+   solana program show eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB --url devnet
+   ```
+
+4. In the Supabase SQL editor run `supabase/migrations/20261127000000_escrow.sql`.
+5. Set `ESCROW_PROGRAM_ID` and `STOKED_ESCROW=1` for a Vercel preview, deploy it, and create, claim and check one gift on the explorer.
+6. Refunds, when gifts expire: `ESCROW_PROGRAM_ID=… pnpm --filter @stoked/chain escrow:refund` with the devnet `.env`.
+
+To roll back, unset `STOKED_ESCROW` only, and keep `ESCROW_PROGRAM_ID`.

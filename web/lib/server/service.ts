@@ -10,8 +10,13 @@
  *   5. Retry while claiming: confirmed → claimed; pending → 202; expired or
  *      failed (finalized, so nothing moved) → one caller replaces the stored
  *      signature by CAS. The wallet never changes.
+ *
+ * Escrow gifts (docs/escrow.md) lock their tokens at creation. The same steps
+ * claim them, building the program's claim instead of a treasury transfer, and
+ * the chain is read first: it is the authority on whether the gift was paid.
  */
 import type { ChainAdapter, ClaimStatus, SignedClaim } from "@stoked/chain";
+import type { EscrowAdapter, EscrowGiftState } from "@stoked/chain/escrow";
 import {
   ClaimGiftRequest,
   CreateGiftRequest,
@@ -34,10 +39,24 @@ import {
   type Ticker,
 } from "@stoked/shared";
 import { PublicKey } from "@solana/web3.js";
+import { randomUUID } from "node:crypto";
 import { ApiError, invalidState, notFound } from "./errors";
 import type { RateLimiter } from "./rate-limit";
-import type { GiftRecord, GiftStore } from "./store";
+import type { GiftRecord, GiftStore, NewGift } from "./store";
 import { hashToken, newClaimToken, tokenMatches } from "./tokens";
+
+/** How long after the later of creation and opensAt an escrow gift can be claimed. */
+export const ESCROW_TTL_SECONDS = 30 * 86_400;
+/** Escrow gifts lock tokens at creation, so opensAt can't be arbitrarily far off. */
+export const ESCROW_MAX_OPENS_AHEAD_MS = 365 * 86_400_000;
+
+export interface EscrowDeps {
+  adapter: EscrowAdapter;
+  /** The STOKED_ESCROW flag, for new gifts only: each gift keeps the mode it was created with. */
+  createGifts: boolean;
+  /** Status checks to wait for the locking transaction before failing the request. */
+  createConfirmPolls?: number;
+}
 
 export interface ServiceDeps {
   store: GiftStore;
@@ -50,6 +69,8 @@ export interface ServiceDeps {
   newToken?: () => string;
   /** Durable cap on gifts created per window, counted in the database. */
   creationCap?: { max: number; windowMs: number };
+  /** Absent: no escrow at all. Escrow gifts are then refused, never paid from the treasury. */
+  escrow?: EscrowDeps;
 }
 
 interface RequestSchema<T> {
@@ -236,11 +257,105 @@ export function createGiftService(deps: ServiceDeps) {
     return respond(done ?? (await reload(g.id)));
   }
 
+  /** Insert an escrow gift and lock its tokens; succeeds only once the lock is confirmed. */
+  async function createLocked(escrow: EscrowDeps, gift: NewGift, claimToken: string): Promise<string> {
+    const id = randomUUID();
+    const openAt = gift.opensAt ? Math.ceil(Date.parse(gift.opensAt) / 1000) : 0;
+    const unavailable = (what: string, err: unknown) => {
+      logError(what, err);
+      return new ApiError("chain_unavailable", "Couldn't lock the gift on Solana; try again shortly");
+    };
+    let lock: SignedClaim & { account: string };
+    try {
+      lock = await escrow.adapter.buildCreate({
+        giftId: id,
+        claimToken,
+        ticker: gift.ticker,
+        raw: BigInt(gift.tokenRaw),
+        openAt,
+        expiresAt: Math.max(nowSeconds(), openAt) + ESCROW_TTL_SECONDS,
+      });
+    } catch (err) {
+      throw unavailable("build escrow gift", err);
+    }
+    // The row is written first, so tokens never lock without a record of where.
+    await store.insert({ ...gift, id, escrowAccount: lock.account });
+    try {
+      await chain.sendClaim(lock);
+    } catch (err) {
+      throw unavailable(`send escrow gift ${id}`, err);
+    }
+    let state: ClaimStatus["state"] = "pending";
+    for (let i = 0; i < (escrow.createConfirmPolls ?? 24) && state === "pending"; i++) {
+      if (i > 0) await sleep(confirmIntervalMs);
+      state = (await statusOf({ signature: lock.signature, lastValidBlockHeight: lock.lastValidBlockHeight })).state;
+    }
+    // Unconfirmed: the token is never returned. If the lock lands late, only a refund can move it.
+    if (state !== "confirmed") throw unavailable(`confirm escrow gift ${id}`, new Error(`transaction ${state}`));
+    return id;
+  }
+
+  function escrowAdapter(): EscrowAdapter {
+    if (!deps.escrow) {
+      logError("escrow claim", new Error("ESCROW_PROGRAM_ID is not set but an escrow gift exists"));
+      throw new ApiError("internal", "Server is missing its escrow configuration");
+    }
+    return deps.escrow.adapter;
+  }
+
+  /**
+   * Read an escrow gift on chain and refuse what the program would refuse.
+   * Returns it when `wallet` can be paid, or already was.
+   */
+  async function escrowState(g: GiftRecord, wallet: string): Promise<EscrowGiftState> {
+    const adapter = escrowAdapter();
+    let read: Awaited<ReturnType<EscrowAdapter["read"]>>;
+    try {
+      read = await adapter.read(g.escrowAccount!);
+    } catch (err) {
+      logError(`read escrow gift ${g.id}`, err);
+      throw new ApiError("chain_unavailable", "Couldn't reach Solana; try again shortly");
+    }
+    const { gift, clusterTime } = read;
+    if (!gift) throw new ApiError("chain_unavailable", "This gift isn't visible on Solana yet; try again shortly");
+    if (gift.status === "claimed") {
+      if (gift.recipient !== wallet) throw invalidState("This gift was already claimed to a different wallet");
+      return gift;
+    }
+    if (gift.status === "refunded" || clusterTime >= gift.expiresAt) throw invalidState("This gift has expired");
+    if (clusterTime < gift.openAt) {
+      throw new ApiError("too_early", "This gift hasn't opened on Solana yet; try again in a moment");
+    }
+    return gift;
+  }
+
+  /** The program already paid the bound wallet by a transaction other than the stored one: record that one. */
+  async function recordPaid(g: GiftRecord): Promise<ClaimResult> {
+    let found: string | null;
+    try {
+      found = await escrowAdapter().findClaimSignature(g.escrowAccount!);
+    } catch (err) {
+      logError(`find claim for gift ${g.id}`, err);
+      throw new ApiError("chain_unavailable", "Couldn't reach Solana; try again shortly");
+    }
+    if (!found) return pending(g);
+    const stored = await store.setClaimTx(g.id, g.claimSignature, found, 0n);
+    return stored ? settleConfirmed(stored) : respond(await reload(g.id));
+  }
+
   /** Steps 2–4: build, store (CAS against `expected`), send, briefly wait for confirmation. */
-  async function signStoreSend(g: GiftRecord, expected: string | null): Promise<ClaimResult> {
+  async function signStoreSend(g: GiftRecord, expected: string | null, claimToken: string): Promise<ClaimResult> {
+    if (g.escrowAccount && (await escrowState(g, g.recipientWallet!)).status === "claimed") return recordPaid(g);
     let signed: SignedClaim;
     try {
-      signed = await chain.buildClaim({ ticker: g.ticker, recipientWallet: g.recipientWallet!, raw: BigInt(g.tokenRaw) });
+      signed = g.escrowAccount
+        ? await escrowAdapter().buildClaim({
+            account: g.escrowAccount,
+            giftId: g.id,
+            claimToken,
+            recipientWallet: g.recipientWallet!,
+          })
+        : await chain.buildClaim({ ticker: g.ticker, recipientWallet: g.recipientWallet!, raw: BigInt(g.tokenRaw) });
     } catch (err) {
       logError("build claim", err);
       throw new ApiError("chain_unavailable", "Couldn't reach Solana to prepare the transfer; try again shortly");
@@ -260,7 +375,7 @@ export function createGiftService(deps: ServiceDeps) {
       return pending(stored);
     }
     for (let i = 0; i < confirmPolls; i++) {
-      const s = await statusOf(stored);
+      const s = await statusOf(sentTx(stored));
       if (s.state === "confirmed") return settleConfirmed(stored);
       if (s.state !== "pending") break;
       await sleep(confirmIntervalMs);
@@ -268,9 +383,11 @@ export function createGiftService(deps: ServiceDeps) {
     return pending(stored);
   }
 
-  async function statusOf(g: GiftRecord): Promise<ClaimStatus> {
+  const sentTx = (g: GiftRecord) => ({ signature: g.claimSignature!, lastValidBlockHeight: g.claimLastValidHeight! });
+
+  async function statusOf(tx: Pick<SignedClaim, "signature" | "lastValidBlockHeight">): Promise<ClaimStatus> {
     try {
-      return await chain.claimStatus(g.claimSignature!, g.claimLastValidHeight!);
+      return await chain.claimStatus(tx.signature, tx.lastValidBlockHeight);
     } catch (err) {
       // Unknown is never treated as expired: replacing a transaction that might still land could pay twice.
       logError("claim status", err);
@@ -279,9 +396,9 @@ export function createGiftService(deps: ServiceDeps) {
   }
 
   /** Step 5. */
-  async function progress(g: GiftRecord): Promise<ClaimResult> {
-    if (!g.claimSignature) return signStoreSend(g, null);
-    const s = await statusOf(g);
+  async function progress(g: GiftRecord, claimToken: string): Promise<ClaimResult> {
+    if (!g.claimSignature) return signStoreSend(g, null, claimToken);
+    const s = await statusOf(sentTx(g));
     switch (s.state) {
       case "confirmed":
         return settleConfirmed(g);
@@ -290,7 +407,7 @@ export function createGiftService(deps: ServiceDeps) {
       case "expired":
       case "failed":
         // Finalized absence or failure: nothing moved, so replace it (CAS keeps it to one caller).
-        return signStoreSend(g, g.claimSignature);
+        return signStoreSend(g, g.claimSignature, claimToken);
     }
   }
 
@@ -299,6 +416,10 @@ export function createGiftService(deps: ServiceDeps) {
       const req = parseRequest(CreateGiftRequest, body);
       if (req.opensAt && Date.parse(req.opensAt) <= now().getTime()) {
         throw new ApiError("validation_failed", "opensAt must be in the future");
+      }
+      const locks = deps.escrow?.createGifts ? deps.escrow : undefined;
+      if (locks && req.opensAt && Date.parse(req.opensAt) > now().getTime() + ESCROW_MAX_OPENS_AHEAD_MS) {
+        throw new ApiError("validation_failed", "opensAt can be at most 365 days ahead");
       }
       if (!rateLimiter.take(clientKey)) throw new ApiError("rate_limited", "Too many gifts; try again in a minute");
       // Durable cap across instances and cold starts (the in-memory limiter is per instance).
@@ -310,7 +431,7 @@ export function createGiftService(deps: ServiceDeps) {
       const m = await multiplier(req.ticker);
       const raw = usdToRaw(req.usdCents, p.usdCents, m);
       const token = newToken();
-      const g = await store.insert({
+      const gift: NewGift = {
         senderName: req.senderName,
         recipientName: req.recipientName,
         ticker: req.ticker,
@@ -321,8 +442,9 @@ export function createGiftService(deps: ServiceDeps) {
         opensAt: req.opensAt ? new Date(req.opensAt).toISOString() : null,
         claimTokenHash: hashToken(token),
         createdAt: now().toISOString(),
-      });
-      return { id: g.id, claimToken: token };
+      };
+      const id = locks ? await createLocked(locks, gift, token) : (await store.insert(gift)).id;
+      return { id, claimToken: token };
     },
 
     async get(id: string): Promise<PublicGift> {
@@ -345,6 +467,7 @@ export function createGiftService(deps: ServiceDeps) {
       const { ticker } = parseRequest(SwapGiftRequest, body);
       const g = await authed(id, token);
       if (g.status !== "opened") throw invalidState(`Can't swap a gift that is ${g.status}`);
+      if (g.escrowAccount) throw invalidState("This gift's tokens are locked in escrow, so it can't be swapped");
       const p = await price(ticker);
       const m = await multiplier(ticker);
       const raw = usdToRaw(g.usdCents, p.usdCents, m); // same USD value
@@ -364,6 +487,8 @@ export function createGiftService(deps: ServiceDeps) {
       let g = await authed(id, token);
       if (g.status === "wrapped") throw invalidState("Open the gift before claiming it");
       if (g.status === "opened") {
+        // Don't bind a wallet to an escrow gift the program would refuse.
+        if (g.escrowAccount) await escrowState(g, wallet);
         // Step 1.
         g = (await store.beginClaim(id, wallet)) ?? (await reload(id));
       }
@@ -372,7 +497,7 @@ export function createGiftService(deps: ServiceDeps) {
         throw invalidState("This gift is already being claimed to a different wallet");
       }
       if (g.status === "claimed") return claimed(g);
-      return progress(g);
+      return progress(g, token!);
     },
   };
 }

@@ -24,6 +24,8 @@ export interface GiftRecord {
   createdAt: string;
   openedAt: string | null;
   claimedAt: string | null;
+  /** On-chain escrow account holding the tokens; null for a treasury-transfer gift. Fixed at creation. */
+  escrowAccount: string | null;
 }
 
 export interface NewGift {
@@ -38,6 +40,9 @@ export interface NewGift {
   claimTokenHash: string;
   /** Server clock, so the durable creation cap and createdAt agree. */
   createdAt: string;
+  /** Escrow gifts only: the id (needed before insert to derive the claim key) and the on-chain account. */
+  id?: string;
+  escrowAccount?: string;
 }
 
 export interface PriceRecord {

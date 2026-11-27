@@ -9,5 +9,5 @@ export default defineConfig({
       "server-only": `${root}test/server/server-only-stub.ts`,
     },
   },
-  test: { include: ["test/**/*.test.ts"], exclude: ["test/validator/**", "**/node_modules/**"] },
+  test: { include: ["test/**/*.test.ts"], exclude: ["test/validator/**", "test/escrow/**", "**/node_modules/**"] },
 });
