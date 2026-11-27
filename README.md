@@ -1,102 +1,86 @@
 # Stoked
 
-**Stock gifts that live in the conversation.** Send a friend $10 of Nvidia. They get a wrapped present, unwrap it, and test tokens that track the stock land in their wallet.
+**Stock gifts that live in the conversation.** Send a friend $10 of Nvidia. They unwrap it, and test tokens representing the stock land in their wallet.
 
 **Live demo:** https://stoked-ebon.vercel.app
 
-> **Status:** the web flow works end to end on Solana **devnet**: send, unwrap, swap and claim. The tokens are test tokens with no monetary value, and prices are fixed demo prices. An on-chain escrow program is built and tested on a local validator, but it is off by default and not deployed. The iMessage app is not built.
+Stoked runs on Solana **devnet**. The tokens are test tokens with no monetary value, and prices are fixed demo prices.
 
-## What works today
+## How it works
 
-1. **Pick** a stock (NVDA, AAPL, SPY, TSLA or COST), $10, $25 or $50, a note, and whether it opens now or later.
-2. **Wrap** it and send the private link through the phone's share sheet, or copy it. The link preview shows a wrapped card without the contents.
-3. **Unwrap** it, swap for a different stock if you like, then **claim** it. The browser creates a wallet whose private key can't be exported, and the server sends the tokens to it.
-4. **Watch**: the sender's page updates as the gift is opened and claimed, and the wallet page shows the holdings.
+1. **Send.** Pick a stock (NVDA, AAPL, SPY, TSLA or COST), an amount ($10, $25 or $50), a note and an opening time, then share the private link. Its preview doesn't reveal the contents.
+2. **Unwrap.** The recipient opens the gift and can swap it for a different stock.
+3. **Claim.** Their browser creates a wallet with a non-exportable private key, and the tokens are sent to it. The sender sees the gift's status update.
 
-A claim is built never to pay twice: the transaction signature is stored before sending and checked before any retry.
+To prevent double payment, each claim's transaction signature is stored before sending and checked before any retry.
 
-## Design mockups
-
-| Pick a gift | Wrapped | Unwrapped |
-|---|---|---|
-| ![Pick a gift](mockups/png/01-sam-picks-a-gift.png) | ![Wrapped bubble](mockups/png/02-maya-gets-a-wrapped-bubble.png) | ![Unwrapped](mockups/png/03b-maya-unwraps-it-opened.png) |
-
-| Claimed | Group chip-in |
-|---|---|
-| ![Claimed](mockups/png/04-bubble-updates-in-place.png) | ![Group chip-in](mockups/png/05-group-chip-in.png) |
-
-These are mockups, not screenshots. Names, messages and prices are sample content. The in-chat card and group chip-in are not built.
-
-Stock gift links already exist. What Stoked is aiming for is the conversation: the gift as an object in the thread, where friends can see it change state.
-
-## Stack
+## Architecture
 
 | Part | Choice |
 |---|---|
-| Tokens | Solana Token-2022 devnet mints with Scaled UI Amount, the extension xStocks use to represent dividends and splits |
-| API and web app | Next.js and TypeScript, deployed on Vercel |
-| Data | Supabase Postgres, readable and writable only by the server |
+| Web app and API | Next.js and TypeScript on Vercel |
+| Data | Supabase Postgres, accessible only to the server |
+| Tokens | Solana Token-2022 mints with Scaled UI Amount, which can represent dividends and splits |
+| Escrow | Anchor program |
 
 A server-held treasury funds gifts and sends the transfers; senders don't pay.
 
-An [Anchor escrow program](docs/escrow.md) can hold each gift's tokens in a vault, release them once after the open time, and return them to the treasury after expiry. The live site doesn't use it yet. It isn't trustless: the server still creates and signs every claim.
+### Escrow
 
-## Run the checks
+The [escrow program](docs/escrow.md) locks each gift's tokens in its own vault, releases them once after the opening time, and allows a refund to the treasury after expiry. It is tested on a local validator and deployed to devnet, but **the live app doesn't use it yet**. It is not trustless: the server creates and signs every claim.
 
-Needs Node 22 or later and pnpm. The browser tests also need the Solana CLI (`solana-test-validator`) and Playwright's Chromium.
+## Devnet addresses
+
+| Account | Address |
+|---|---|
+| Escrow program | [`eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB`](https://explorer.solana.com/address/eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB?cluster=devnet) |
+| Treasury | [`4H7CieRb7mFvq2SaNChTcVpVcdLVFtJ5Krf96Dqu7qL3`](https://explorer.solana.com/address/4H7CieRb7mFvq2SaNChTcVpVcdLVFtJ5Krf96Dqu7qL3?cluster=devnet) |
+
+Token mint addresses and setup steps are in [docs/devnet.md](docs/devnet.md).
+
+## Development
+
+Requires Node 22 or later and pnpm. Browser tests also need the Solana CLI and Playwright's Chromium; escrow tests also need Rust.
 
 ```sh
 pnpm install
 pnpm lint && pnpm typecheck && pnpm test
 pnpm --filter @stoked/web exec playwright install chromium
 pnpm test:e2e
-pnpm test:escrow   # also needs Rust; not run in CI
+pnpm test:escrow   # not run in CI
 ```
 
-Devnet setup, mint addresses and the deployed smoke test are in [docs/devnet.md](docs/devnet.md).
+## Limitations
 
-## Limits
-
-- Devnet only. Test tokens are not securities and have no value.
-- Prices are fixed demo values, not market data.
-- On the live site, gifts are funded by the treasury and nothing is held in escrow.
-- Anyone holding a gift's claim link can claim it.
-- The recipient's wallet lives only in their browser. Clearing site data loses it.
+- Devnet only. The test tokens are not securities.
+- Prices are demo values, not market data.
+- On the live app, gifts are not held in escrow.
+- Anyone with a gift's link can claim it.
+- The recipient's wallet exists only in their browser. Clearing site data loses it.
 - Not yet tested in Safari or on a phone.
-- Tokenized US stocks such as xStocks are only offered to eligible people outside the US. A real-money version would need eligibility checks and legal review.
+- The escrow program has not been audited.
+- A real-money version would need eligibility checks and legal review. Tokenized US stocks such as xStocks are offered only to eligible people outside the US.
 
-## Docs
+## Documentation
 
-- [Build plan](docs/build-plan.md): architecture, contracts, schedule, risks
-- [Devnet](docs/devnet.md): addresses, setup, verification
+- [Build plan](docs/build-plan.md): architecture and contracts
 - [Escrow](docs/escrow.md): program design and threat model
-- [Design](docs/design.md): screens, tokens, motion
-- [Agent goals](docs/goals.md): ready-to-run `/goal` statements
-- [CLAUDE.md](CLAUDE.md): rules for coding agents
+- [Devnet](docs/devnet.md): addresses, setup and verification
+- [Design](docs/design.md): screens and motion
 
-## Built before vs. during the hackathon
+## Hackathon disclosure
 
-Dev3pack (November 27–29, 2026) allows earlier work and asks teams to be transparent about it. We found dates but no start time, so the line is drawn at a commit.
+Dev3pack (November 27–29, 2026) allows earlier work and asks teams to disclose it. We found no published start time, so the line is drawn at a commit.
 
-### Before
+**Before:** everything up to and including the merge of pull request [#9](https://github.com/brockbenton/stoked/pull/9):
 
-Everything up to and including the merge of pull request [#9](https://github.com/brockbenton/stoked/pull/9), whose page shows the merge commit and time. Later changes to the code are listed under "During".
+- Concept, mockups and build plan ([#1](https://github.com/brockbenton/stoked/pull/1))
+- Workspace, shared contracts, database schema and CI ([#2](https://github.com/brockbenton/stoked/pull/2))
+- Token-2022 mints and claim transfer ([#3](https://github.com/brockbenton/stoked/pull/3))
+- Web app, API, browser wallet and tests ([#4](https://github.com/brockbenton/stoked/pull/4)–[#6](https://github.com/brockbenton/stoked/pull/6))
+- Devnet deployment and interface refinements ([#7](https://github.com/brockbenton/stoked/pull/7)–[#9](https://github.com/brockbenton/stoked/pull/9))
 
-| Work | Pull request |
-|---|---|
-| Concept, mockups, build plan | [#1](https://github.com/brockbenton/stoked/pull/1) |
-| Workspace, shared contracts, database schema, CI | [#2](https://github.com/brockbenton/stoked/pull/2) |
-| Token-2022 mints, multiplier handling, claim transfer | [#3](https://github.com/brockbenton/stoked/pull/3) |
-| Gift web UI | [#4](https://github.com/brockbenton/stoked/pull/4) |
-| Gift API and claim protocol | [#5](https://github.com/brockbenton/stoked/pull/5) |
-| UI connected to the API, browser wallet, browser tests | [#6](https://github.com/brockbenton/stoked/pull/6) |
-| Devnet deployment, smoke test, value rounding, UI label removal | [#7](https://github.com/brockbenton/stoked/pull/7) |
-| Share button, app icons, home link preview, amount and value display | [#9](https://github.com/brockbenton/stoked/pull/9) |
+**During:**
 
-The smoke test last passed on the live site after #7, at commit [`80a54c8`](https://github.com/brockbenton/stoked/commit/80a54c83a910e23f49b0b4fd3d39fcbecdbab9a3) ([claim transaction](https://explorer.solana.com/tx/48ojBPUCFYrJ8A5HEqkGbsz7WzdV4gnWYjAgZCzhmSEfdwp4msK51fNJFM3uGRv1JKjnZp55skccoFBxi348mCUv?cluster=devnet)).
-
-### During
-
-| Work | Pull request |
-|---|---|
-| Escrow program (Anchor), TypeScript client, API support behind a flag, design and threat model | [#10](https://github.com/brockbenton/stoked/pull/10) |
+- Escrow program, TypeScript client, API support behind a feature flag, and design document ([#10](https://github.com/brockbenton/stoked/pull/10))
+- Escrow program deployed to devnet ([transaction](https://explorer.solana.com/tx/9NJ8pxkGDWrwDDtsMVa1sEEfdjyqfZXG1ykUTofZUPXMS6zLST9SsSvZitMfwusKEKP37sSDWGtEdz7J6533rLb?cluster=devnet))
