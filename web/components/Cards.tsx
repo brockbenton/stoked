@@ -68,7 +68,7 @@ export function OpenedCard({ gift }: { gift: Opened }) {
         <p className="ocard__shares">
           ≈ {gift.value.shares} {stockSymbol(gift.ticker)} · {where}
         </p>
-        <ValueLine value={gift.value} />
+        <ValueLine value={gift.value} giftCents={gift.usdCents} />
       </div>
     </article>
   );

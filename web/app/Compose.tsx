@@ -233,6 +233,9 @@ function Field({ id, label, error, children }: { id: string; label: string; erro
 
 function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [shareFailed, setShareFailed] = useState(false);
+  // This view only renders after a submit in the browser, so there's no server render to disagree with.
+  const canShare = typeof navigator.share === "function";
   const linkId = useId();
   const path = new URL(sent.link).pathname + new URL(sent.link).hash;
   // The sender's card follows the gift as the recipient opens and claims it.
@@ -249,6 +252,16 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
         : gift.status === "claimed"
           ? `${name} claimed it.`
           : "";
+  /** Opens the system share sheet. Only the link is passed, so a chat shows just the wrapped preview. */
+  async function share() {
+    setShareFailed(false);
+    try {
+      await navigator.share({ url: sent.link });
+    } catch (e) {
+      // AbortError means the sender closed the sheet.
+      if (!(e instanceof Error && e.name === "AbortError")) setShareFailed(true);
+    }
+  }
   return (
     <section className="sent" aria-labelledby="sent-title">
       <h1 id="sent-title" className="sent__title">
@@ -280,7 +293,8 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
               <input id={linkId} className="input copy__input" readOnly value={sent.link} onFocus={(e) => e.target.select()} />
               <button
                 type="button"
-                className="btn btn--secondary copy__btn"
+                // Where there's no share sheet, copying is the main way to send the link.
+                className={`btn ${canShare ? "btn--secondary" : "btn--primary"} copy__btn`}
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(sent.link);
@@ -294,14 +308,27 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
               </button>
             </div>
           </div>
-          <Link href={path} className="btn btn--primary">
-            Open it as {sent.gift.recipientName}
-          </Link>
+          {canShare && (
+            <button type="button" className="btn btn--primary" onClick={share}>
+              Share with {name}
+            </button>
+          )}
+          {shareFailed && (
+            <p className="error" role="alert">
+              Couldn&rsquo;t open sharing. Copy the link instead.
+            </p>
+          )}
         </>
       )}
       <button type="button" className={`btn ${claimed ? "btn--primary" : "btn--secondary"}`} onClick={onAgain}>
         Send another
       </button>
+      {!claimed && (
+        // Quiet on purpose: this opens the gift on the sender's own device.
+        <Link href={path} className="sent__preview">
+          Open it as {name}
+        </Link>
+      )}
       <span role="status" className="sr-only">
         {copied ? "Link copied" : ""}
       </span>

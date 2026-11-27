@@ -299,7 +299,7 @@ export function GiftScreen({ id }: { id: string }) {
             <div id="gift-notice" tabIndex={-1} className={`notice ${justClaimed ? "notice--ok" : ""}`} role="status">
               {justClaimed ? (
                 <>
-                  <strong>Claimed.</strong> {gift.value.shares} {gift.ticker} are in your wallet{" "}
+                  <strong>Claimed.</strong> ≈ {gift.value.shares} {stockSymbol(gift.ticker)} is in your wallet{" "}
                   {shortAddress(gift.recipientWallet)}.
                 </>
               ) : isRecipient ? (
@@ -503,7 +503,7 @@ function Reveal({
       <p className="shares">
         ≈ {gift.value.shares} shares · {stockSymbol(gift.ticker)}
       </p>
-      <ValueLine value={gift.value} />
+      <ValueLine value={gift.value} giftCents={gift.usdCents} />
       {gift.note && (
         <figure className="note">
           <blockquote className="note__text">{gift.note}</blockquote>

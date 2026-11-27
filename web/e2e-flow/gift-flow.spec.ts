@@ -139,7 +139,11 @@ test("send, unwrap, swap and claim across two devices", async ({ browser, baseUR
   await expect(sender.page.locator(".ocard__shares")).toContainText(`≈ ${onChain.shown} AAPL`);
   await recipient.page.getByRole("link", { name: "See your wallet" }).click();
   await expect(recipient.page.getByTestId("wallet-address")).toHaveText(wallet.address);
-  await expect(recipient.page.getByTestId("holding-tAAPL")).toContainText(onChain.shownExact);
+  const amount = recipient.page.getByTestId("holding-tAAPL").locator(".holding__amount");
+  await expect(amount).toHaveAttribute("data-exact", onChain.shownExact);
+  await expect(amount).toHaveText(`≈ ${onChain.shown}`);
+  // The value repeats the gift amount, so no value line yet.
+  await expect(sender.page.locator(".ocard .value")).toHaveCount(0);
   await expect(recipient.page.locator(".holding")).toHaveCount(1);
   await recipient.page.screenshot({ path: "test-results/flow-screens/wallet.png" });
   await sender.page.screenshot({ path: "test-results/flow-screens/sender-claimed.png", fullPage: true });
@@ -150,8 +154,10 @@ test("send, unwrap, swap and claim across two devices", async ({ browser, baseUR
   expect(after.raw).toBe(onChain.raw);
   expect(after.shownUnits).toBeGreaterThan(onChain.shownUnits);
   await recipient.page.getByRole("button", { name: "Refresh" }).click();
-  await expect(recipient.page.getByTestId("holding-tAAPL")).toContainText(after.shownExact);
+  await expect(amount).toHaveAttribute("data-exact", after.shownExact);
+  await expect(amount).toHaveText(`≈ ${after.shown}`);
   await expect(sender.page.locator(".ocard__shares")).toContainText(`≈ ${after.shown} AAPL`);
+  await expect(sender.page.locator(".ocard .value")).toHaveText("Value $15.00");
 
   // A second claim is refused: in the UI on another device, and by the API.
   const third = await device(browser, baseURL!);

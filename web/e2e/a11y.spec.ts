@@ -41,6 +41,18 @@ async function assertAxe(page: Page) {
 const screens: Array<{ name: string; go: (page: Page) => Promise<void> }> = [
   { name: "compose", go: async (p) => void (await p.goto("/")) },
   {
+    name: "gift sent",
+    go: async (p) => {
+      await p.addInitScript(() => Object.defineProperty(navigator, "share", { value: async () => {} }));
+      await p.goto("/");
+      await p.getByLabel("To", { exact: true }).fill("Maya");
+      await p.getByLabel("From", { exact: true }).fill("Sam");
+      await p.getByRole("button", { name: /^Wrap/ }).click();
+      await p.clock.runFor(1000);
+      await expect(p.getByRole("button", { name: "Share with Maya" })).toBeVisible();
+    },
+  },
+  {
     name: "wrapped card",
     go: async (p) => {
       await p.goto(giftUrl(ids.wrapped));
