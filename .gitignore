@@ -16,6 +16,8 @@ dist/
 coverage/
 test-ledger/
 *.tsbuildinfo
+# Rust and SBF output, including the escrow program keypair
+target/
 
 # Xcode
 xcuserdata/
