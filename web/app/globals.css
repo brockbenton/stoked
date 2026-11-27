@@ -120,29 +120,6 @@ a {
   border-radius: 8px;
 }
 
-.devnet {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: #fff;
-  color: var(--ink-muted);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
-  white-space: nowrap;
-}
-
-.devnet::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--gold-500);
-}
-
 /* ---------- labels, inputs, buttons ---------- */
 
 .label {
@@ -271,11 +248,6 @@ a {
   border-radius: 22px 22px 0 0;
   border-top: 1px solid var(--border);
   min-height: 100dvh;
-}
-
-.compose > .devnet {
-  align-self: flex-start;
-  margin-top: -6px;
 }
 
 .compose__head {
@@ -709,13 +681,6 @@ button.wcard {
   border-radius: 50%;
   background: var(--gain);
   flex: none;
-}
-
-.value__src {
-  display: block;
-  color: var(--ink-subtle);
-  font-size: 12px;
-  line-height: 16px;
 }
 
 .notice {
@@ -1218,10 +1183,6 @@ button.wcard {
 .note__by {
   color: var(--ink-muted);
   margin-top: 4px;
-}
-
-.reveal__tag {
-  margin-top: 14px;
 }
 
 .actions,

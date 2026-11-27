@@ -57,6 +57,6 @@ pnpm --filter @stoked/web test:smoke
 
 ## Limits
 
-- The `prices` table is empty, so the server uses its built-in prices, labeled "Demo price (not live)". The time shown beside the label is the time of the request, not of a price update.
+- The `prices` table is empty, so the server uses its built-in demo prices. The API marks them "Demo price (not live)"; the app doesn't show that.
 - Not tested in Safari or on a phone.
 - Public devnet RPC can be slow: the smoke test took under 2 minutes.

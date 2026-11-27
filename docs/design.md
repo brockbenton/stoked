@@ -19,8 +19,7 @@ The demo uses valueless test tokens, so:
 |---|---|
 | "A real stock inside" | "A stock gift inside" |
 | "Send a real stock" | "Send a stock gift" |
-| "Live value" | "Value", plus the price's source and age. "Live" only when the price feed is fresh |
-| — | A small "Devnet demo" label on compose, reveal and group screens |
+| "Live value" | "Value" |
 
 Hide the voice button and player until that stretch goal ships. Keep the eligibility footer on the reveal.
 

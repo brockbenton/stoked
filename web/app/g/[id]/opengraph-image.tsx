@@ -34,7 +34,7 @@ export default function Image() {
         >
           <div style={{ display: "flex", fontSize: 84 }}>A stock gift inside</div>
           <div style={{ display: "flex", fontSize: 40, marginTop: 12, color: "#DCE7E1" }}>Open the link to unwrap it</div>
-          <div style={{ display: "flex", fontSize: 30, marginTop: 120, color: "#DCE7E1" }}>Stoked · Devnet demo</div>
+          <div style={{ display: "flex", fontSize: 30, marginTop: 120, color: "#DCE7E1" }}>Stoked</div>
         </div>
       </div>
     ),

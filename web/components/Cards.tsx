@@ -47,7 +47,7 @@ export function WrappedCard({
 }
 
 /** 04: the card after opening; "claimed" once the tokens are in the wallet. */
-export function OpenedCard({ gift, now }: { gift: Opened; now: number }) {
+export function OpenedCard({ gift }: { gift: Opened }) {
   const where =
     gift.status === "claimed"
       ? `in ${gift.recipientName}'s wallet`
@@ -68,7 +68,7 @@ export function OpenedCard({ gift, now }: { gift: Opened; now: number }) {
         <p className="ocard__shares">
           ≈ {gift.value.shares} {stockSymbol(gift.ticker)} · {where}
         </p>
-        <ValueLine value={gift.value} now={now} />
+        <ValueLine value={gift.value} />
       </div>
     </article>
   );
@@ -80,7 +80,7 @@ export function CardMeta({ gift }: { gift: PublicGift }) {
       <p className="meta">
         Stoked · claimed {formatTime(gift.claimedAt)} ·{" "}
         <a className="meta__link" href={explorerTxUrl(gift.claimSignature)} target="_blank" rel="noreferrer">
-          View on devnet explorer
+          View on explorer
         </a>
       </p>
     );

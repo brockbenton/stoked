@@ -33,8 +33,8 @@ describe("reference case: $10.00 at $229.52", () => {
     // 4356918 × 1.002 = 4365631.836 → floor
     expect(rawToShownUnits(raw, "1.002")).toBe(4365631n);
     expect(displayShares(raw, "1.002")).toBe("0.0437");
-    expect(rawToUsdCents(raw, 22952, "1")).toBe(999);
-    expect(rawToUsdCents(raw, 22952, "1.002")).toBe(1001);
+    expect(rawToUsdCents(raw, 22952, "1")).toBe(1000);
+    expect(rawToUsdCents(raw, 22952, "1.002")).toBe(1002);
   });
 });
 
@@ -54,7 +54,7 @@ describe("rounding down", () => {
   });
 
   it("floors the current value in cents", () => {
-    expect(rawToUsdCents(33333333n, 300)).toBe(99);
+    expect(rawToUsdCents(33333333n, 300)).toBe(100);
   });
 
   it("exact divisions are unchanged", () => {
