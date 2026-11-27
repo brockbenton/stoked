@@ -11,7 +11,6 @@ import {
 import Link from "next/link";
 import { useId, useState, type FormEvent } from "react";
 import { CardMeta, OpenedCard, WrappedCard } from "@/components/Cards";
-import { DevnetLabel } from "@/components/DevnetLabel";
 import { GiftIcon } from "@/components/icons";
 import { GiftClientError, getGiftClient } from "@/lib/client";
 import { useGiftPoll } from "@/lib/client/use-gift-poll";
@@ -107,7 +106,6 @@ export function Compose() {
         </h1>
         <span className="compose__tagline">Send a stock gift</span>
       </div>
-      <DevnetLabel />
 
       <div className="row2">
         <Field id={ids.to} label="To" error={errors.recipientName}>
@@ -239,11 +237,7 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
   const path = new URL(sent.link).pathname + new URL(sent.link).hash;
   // The sender's card follows the gift as the recipient opens and claims it.
   const [gift, setGift] = useState(sent.gift);
-  const [now, setNow] = useState(() => Date.now());
-  useGiftPoll(gift, (g) => {
-    setGift(g);
-    setNow(Date.now());
-  });
+  useGiftPoll(gift, setGift);
   const name = gift.recipientName;
   // Once claimed the private link is spent, so stop offering it.
   const claimed = gift.status === "claimed";
@@ -269,7 +263,7 @@ function SentView({ sent, onAgain }: { sent: Sent; onAgain: () => void }) {
         <WrappedCard gift={gift} viewer="sender" />
       ) : (
         <div>
-          <OpenedCard gift={gift} now={now} />
+          <OpenedCard gift={gift} />
           <CardMeta gift={gift} />
         </div>
       )}

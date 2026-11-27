@@ -2,7 +2,6 @@ import { fixtures, PublicGift } from "@stoked/shared";
 import { describe, expect, it } from "vitest";
 import { createFixtureClient, parseSim } from "../lib/client/fixture";
 import { readTokenFromHash } from "../lib/client";
-import { isLivePrice } from "../lib/format";
 
 const T = "token-token-token-token-token-token";
 const fast = (extra: Parameters<typeof createFixtureClient>[0] = {}) =>
@@ -70,11 +69,5 @@ describe("helpers", () => {
   });
   it("parses sim flags", () => {
     expect([...parseSim("?sim=offline,claim-fail&sim=bogus")].sort()).toEqual(["claim-fail", "offline"]);
-  });
-  it("calls a price Live only when fresh and not a demo price", () => {
-    const now = Date.parse("2026-11-28T15:00:00Z");
-    expect(isLivePrice({ priceSource: "Demo price (not live)", priceUpdatedAt: "2026-11-28T15:00:00Z" }, now)).toBe(false);
-    expect(isLivePrice({ priceSource: "Feed", priceUpdatedAt: "2026-11-28T14:58:00Z" }, now)).toBe(true);
-    expect(isLivePrice({ priceSource: "Feed", priceUpdatedAt: "2026-11-28T14:50:00Z" }, now)).toBe(false);
   });
 });

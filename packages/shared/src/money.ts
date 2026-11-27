@@ -5,9 +5,9 @@
  *   raw    = floor(shares / multiplier × 10^8)       stored and transferred
  *   shown  = floor(raw × effective multiplier)        in 10^-8 share units
  *
- * Every amount rounds down, so we never transfer or show more than was paid
- * for. Only the final display string (formatShares) rounds to the nearest
- * 4th decimal, and the UI prefixes it with "≈".
+ * Token amounts round down, so we never transfer more than was paid for. Only
+ * what's displayed rounds to the nearest step: shares to the 4th decimal (the UI
+ * prefixes "≈") and the current value to the cent, so a $25 gift reads $25.00.
  */
 
 export const TOKEN_DECIMALS = 8;
@@ -111,10 +111,10 @@ export function displayShares(raw: bigint, multiplier: MultiplierInput = "1", pl
   return formatShares(rawToShownUnits(raw, multiplier), places);
 }
 
-/** Current value in cents of a raw balance: floor(shown × price). */
+/** Current value of a raw balance: shown × price, rounded half-up to the cent. */
 export function rawToUsdCents(raw: bigint, priceCents: number, multiplier: MultiplierInput = "1"): number {
   assertPositiveInt("priceCents", priceCents);
-  return Number((rawToShownUnits(raw, multiplier) * BigInt(priceCents)) / SCALE);
+  return Number((rawToShownUnits(raw, multiplier) * BigInt(priceCents) + SCALE / 2n) / SCALE);
 }
 
 /** 1000 → "$10.00". Integer cents only. */

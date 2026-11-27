@@ -12,6 +12,7 @@
     "test:ui": "playwright test",
     "test:flow": "tsx ../packages/chain/scripts/with-validator.ts tsx e2e-flow/run.ts",
     "test:e2e": "pnpm test:ui && pnpm test:flow",
+    "test:smoke": "playwright test -c playwright.smoke.config.ts",
     "test:validator": "tsx ../packages/chain/scripts/with-validator.ts vitest run -c vitest.validator.config.ts --reporter=verbose"
   },
   "dependencies": {

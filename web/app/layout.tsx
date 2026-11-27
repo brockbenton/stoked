@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   // Absolute URLs for link previews. Unset, Next uses the deployment URL.
   metadataBase: process.env.APP_ORIGIN ? new URL(process.env.APP_ORIGIN) : undefined,
   title: "Stoked",
-  description: "Gift a slice of a stock in a conversation. Devnet test tokens only.",
+  description: "Gift a slice of a stock in a conversation.",
 };
 
 export const viewport: Viewport = {

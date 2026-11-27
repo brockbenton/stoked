@@ -32,6 +32,8 @@ async function insertGift(overrides: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   db = await PGlite.create();
+  // Supabase's server role: exists before migrations and bypasses RLS.
+  await db.exec("create role service_role nologin bypassrls");
   for (const f of files) await db.exec(readFileSync(join(dir, f), "utf8"));
 });
 
@@ -61,6 +63,27 @@ describe("migrations applied in PGlite", () => {
     ]);
     const policies = await db.query("select * from pg_policies where schemaname = 'public'");
     expect(policies.rows).toHaveLength(0);
+  });
+
+  it("grants the server role read and write, without delete, and grants no one else", async () => {
+    const res = await db.query<{ role: string; table: string; privilege: string }>(
+      `select grantee as role, table_name as table, privilege_type as privilege
+       from information_schema.role_table_grants
+       where table_schema = 'public' and grantee <> current_user order by 1, 2, 3`,
+    );
+    const expected = ["gifts", "prices"].flatMap((table) =>
+      ["INSERT", "SELECT", "UPDATE"].map((privilege) => ({ role: "service_role", table, privilege })),
+    );
+    expect(res.rows).toEqual(expected);
+    await db.exec("set role service_role");
+    try {
+      const id = await insertGift();
+      await db.query("update gifts set status = 'opened' where id = $1", [id]);
+      expect((await db.query("select * from gifts where id = $1", [id])).rows).toHaveLength(1);
+      await expect(db.query("delete from gifts where id = $1", [id])).rejects.toThrow(/permission denied/);
+    } finally {
+      await db.exec("reset role");
+    }
   });
 
   it("an anonymous role sees no rows and cannot write", async () => {

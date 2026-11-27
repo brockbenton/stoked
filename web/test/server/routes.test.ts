@@ -195,8 +195,7 @@ describe("swap", () => {
     expect(g.ticker).toBe("tAAPL");
     expect(g.usdCents).toBe(2500);
     expect(g.tokenRaw).toBe(((2500n * 10n ** 8n) / 27810n).toString()); // demo AAPL price
-    expect(g.value.valueCents).toBeLessThanOrEqual(2500);
-    expect(g.value.valueCents).toBeGreaterThanOrEqual(2499);
+    expect(g.value.valueCents).toBe(2500);
     await claim(id, claimToken);
     expect(await dbStatus(id)).toBe("claimed");
     expectError(await swap(id, claimToken, "tSPY"), 409, "invalid_state");

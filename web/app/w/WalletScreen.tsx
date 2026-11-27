@@ -3,7 +3,6 @@
 import type { WalletResponse } from "@stoked/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { DevnetLabel } from "@/components/DevnetLabel";
 import { getGiftClient, getWallet } from "@/lib/client";
 import { explorerAddressUrl, stockName, stockSymbol } from "@/lib/format";
 
@@ -44,7 +43,6 @@ export function WalletScreen() {
         <Link href="/" className="wordmark">
           Stoked
         </Link>
-        <DevnetLabel />
       </header>
       <section className="wallet" aria-labelledby="wallet-title">
         <h1 id="wallet-title" className="sent__title">
@@ -80,9 +78,9 @@ export function WalletScreen() {
               {copied ? "Copied" : "Copy address"}
             </button>
             <a className="meta__link wallet__explorer" href={explorerAddressUrl(state.address)} target="_blank" rel="noreferrer">
-              View on devnet explorer
+              View on explorer
             </a>
-            <h2 className="label">Test tokens</h2>
+            <h2 className="label">Tokens</h2>
             {state.holdings === null && !state.error && <p className="meta">Loading balances…</p>}
             {state.holdings?.length === 0 && <p className="sent__text">No tokens yet.</p>}
             {state.holdings && state.holdings.length > 0 && (
@@ -102,14 +100,14 @@ export function WalletScreen() {
             )}
             {state.error && (
               <p className="error" role="alert">
-                Couldn&rsquo;t check balances on devnet just now.
+                Couldn&rsquo;t check balances just now.
               </p>
             )}
             <button type="button" className="btn btn--secondary" onClick={() => void refresh()}>
               Refresh
             </button>
             <p className="fine">
-              This wallet lives only in this browser. Clearing site data loses it. Devnet test tokens have no value.
+              This wallet lives only in this browser. Clearing site data loses it.
             </p>
           </>
         )}

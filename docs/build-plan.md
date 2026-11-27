@@ -56,7 +56,7 @@ raw    = floor(shares / multiplier × 10^8)      stored, transferred
 shown  = raw / 10^8 × effective multiplier
 ```
 
-A scheduled multiplier applies only from its effective timestamp (inclusive). Round down, in integer (bigint) arithmetic: `raw`, `shown` (as 10⁻⁸ units) and current value in cents all floor. Only the display string rounds to the nearest 4th decimal, and the UI shows it as "≈". Reference case: $10.00 at $229.52 and multiplier 1 gives raw 4356918 and shows 0.0436; the same raw at multiplier 1.002 shows 0.0437. Wrapping under 1.002 gives raw 4348222, which still shows 0.0436. Code: `packages/shared/src/money.ts`. A script changes the multiplier to demonstrate a dividend.
+A scheduled multiplier applies only from its effective timestamp (inclusive). Integer (bigint) arithmetic: `raw` and `shown` (as 10⁻⁸ units) round down, so a transfer never exceeds what was paid for. Displayed amounts round to the nearest step: the share string to the 4th decimal (shown as "≈") and the current value to the cent. Reference case: $10.00 at $229.52 and multiplier 1 gives raw 4356918 and shows 0.0436; the same raw at multiplier 1.002 shows 0.0437. Wrapping under 1.002 gives raw 4348222, which still shows 0.0436. Code: `packages/shared/src/money.ts`. A script changes the multiplier to demonstrate a dividend.
 
 **Two-version trap:** `@solana/spl-token` 0.4.15 has the scaled-UI helpers but needs web3.js v1; npm's latest is v3.
 
@@ -94,7 +94,7 @@ alter table gifts enable row level security;
 alter table prices enable row level security;
 ```
 
-A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes.
+A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes. A second migration grants `service_role` select, insert and update, because Supabase may not grant new tables automatically.
 
 ## API
 
@@ -186,7 +186,7 @@ If the 1:1 gate slips past Saturday noon, cut G8.
 |---|---|
 | Double claim, stuck claim | Protocol above; G3 tests it |
 | Public devnet RPC is flaky | Configurable RPC; claim is retryable; backup video |
-| Market price barely moves: Thanksgiving is Nov 26, and US markets close for the weekend | Show the price's source and age; use the multiplier change as the visible on-chain event |
+| Market price barely moves: Thanksgiving is Nov 26, and US markets close for the weekend | Use the multiplier change as the visible on-chain event |
 | Unproven iMessage behavior: live-bubble buttons and sending from transcript style are undocumented | Device or Simulator spike first. Default: bubble tap opens the expanded view, which does the action |
 | `MSSession` update may move the message rather than change it in place | Let the live bubble refetch state; check it in the spike |
 | Thin Solana depth | G8 |

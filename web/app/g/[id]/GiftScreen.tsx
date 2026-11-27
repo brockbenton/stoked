@@ -4,7 +4,6 @@ import { formatUsd, TICKERS, type PublicGift, type Ticker } from "@stoked/shared
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CardMeta, OpenedCard, WrappedCard } from "@/components/Cards";
-import { DevnetLabel } from "@/components/DevnetLabel";
 import { GiftBox } from "@/components/GiftBox";
 import { Sheet } from "@/components/Sheet";
 import { ValueLine } from "@/components/ValueLine";
@@ -45,7 +44,6 @@ export function GiftScreen({ id }: { id: string }) {
   const [alreadyClaimed, setAlreadyClaimed] = useState(false);
   const [justClaimed, setJustClaimed] = useState(false);
   const [offline, setOffline] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
   const polling = useRef(false);
   // Bumped when this tab changes the gift, so an older background poll can't undo it.
   const version = useRef(0);
@@ -69,7 +67,6 @@ export function GiftScreen({ id }: { id: string }) {
     try {
       const g = await getGiftClient().getGift(id);
       setLoad({ k: "ready", gift: g });
-      setNow(Date.now());
       // Only the recipient (link with a token) gets the reveal and claim sheet.
       if (hasToken && g.status === "opened") setSheet("reveal");
       if (hasToken && g.status === "claiming") {
@@ -131,7 +128,6 @@ export function GiftScreen({ id }: { id: string }) {
     gift,
     (g) => {
       const before = loadRef.current.k === "ready" ? loadRef.current.gift.status : null;
-      setNow(Date.now());
       if (g.status === "claimed" && before !== "claimed") {
         if (claimRef.current.k === "idle") {
           setLoad({ k: "ready", gift: g });
@@ -201,7 +197,6 @@ export function GiftScreen({ id }: { id: string }) {
       // Show the amount as soon as it's known so it can resolve mid-animation.
       const g = await getGiftClient().openGift(id, token);
       setGift(g);
-      setNow(Date.now());
       await minDelay;
       setSheet("reveal");
     } catch (e) {
@@ -296,7 +291,7 @@ export function GiftScreen({ id }: { id: string }) {
               onOpen={isRecipient ? () => setSheet("box") : undefined}
             />
           ) : (
-            <OpenedCard gift={gift} now={now} />
+            <OpenedCard gift={gift} />
           )}
           <CardMeta gift={gift} />
 
@@ -304,7 +299,7 @@ export function GiftScreen({ id }: { id: string }) {
             <div id="gift-notice" tabIndex={-1} className={`notice ${justClaimed ? "notice--ok" : ""}`} role="status">
               {justClaimed ? (
                 <>
-                  <strong>Claimed.</strong> {gift.value.shares} {gift.ticker} devnet test tokens are in your wallet{" "}
+                  <strong>Claimed.</strong> {gift.value.shares} {gift.ticker} are in your wallet{" "}
                   {shortAddress(gift.recipientWallet)}.
                 </>
               ) : isRecipient ? (
@@ -357,7 +352,7 @@ export function GiftScreen({ id }: { id: string }) {
             />
           )}
           {sheet === "reveal" && gift.status !== "wrapped" && (
-            <Reveal gift={gift} now={now} claim={claim} onClaim={doClaim} onSwap={doSwap} />
+            <Reveal gift={gift} claim={claim} onClaim={doClaim} onSwap={doSwap} />
           )}
         </Sheet>
       )}
@@ -371,7 +366,6 @@ function TopBar() {
       <Link href="/" className="wordmark">
         Stoked
       </Link>
-      <DevnetLabel />
     </header>
   );
 }
@@ -476,13 +470,11 @@ function Closed({
 /** 03b: what's inside, with Claim and Swap. */
 function Reveal({
   gift,
-  now,
   claim,
   onClaim,
   onSwap,
 }: {
   gift: Extract<PublicGift, { status: "opened" | "claiming" | "claimed" }>;
-  now: number;
   claim: Claim;
   onClaim: () => void;
   onSwap: (t: Ticker) => Promise<void>;
@@ -511,16 +503,13 @@ function Reveal({
       <p className="shares">
         ≈ {gift.value.shares} shares · {stockSymbol(gift.ticker)}
       </p>
-      <ValueLine value={gift.value} now={now} extra="updates in the chat" />
+      <ValueLine value={gift.value} />
       {gift.note && (
         <figure className="note">
           <blockquote className="note__text">{gift.note}</blockquote>
           <figcaption className="note__by">{gift.senderName}</figcaption>
         </figure>
       )}
-      <div className="reveal__tag">
-        <DevnetLabel />
-      </div>
 
       {swapping ? (
         <SwapPicker
@@ -578,7 +567,7 @@ function ClaimStatusPanel({ claim, onRetry }: { claim: Claim; onRetry: () => voi
         {claim.stuck ? (
           <>
             <p>
-              <strong>Still confirming on devnet.</strong> Your gift is safe and will only be sent once.
+              <strong>Still confirming.</strong> Your gift is safe and will only be sent once.
             </p>
             <button type="button" className="btn btn--primary" onClick={onRetry}>
               Check again
@@ -587,7 +576,7 @@ function ClaimStatusPanel({ claim, onRetry }: { claim: Claim; onRetry: () => voi
         ) : (
           <p>
             <span className="spinner" aria-hidden="true" /> <strong>Sending to your wallet…</strong> This usually takes a few
-            seconds on devnet.
+            seconds.
           </p>
         )}
       </div>

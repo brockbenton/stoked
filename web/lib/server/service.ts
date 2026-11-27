@@ -304,7 +304,7 @@ export function createGiftService(deps: ServiceDeps) {
       // Durable cap across instances and cold starts (the in-memory limiter is per instance).
       const since = new Date(now().getTime() - creationCap.windowMs).toISOString();
       if ((await store.countCreatedSince(since)) >= creationCap.max) {
-        throw new ApiError("rate_limited", "The demo has hit its gift limit for now; try again later");
+        throw new ApiError("rate_limited", "Gift limit reached for now; try again later");
       }
       const p = await price(req.ticker);
       const m = await multiplier(req.ticker);
