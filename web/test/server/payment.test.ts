@@ -229,14 +229,25 @@ describe("submit", () => {
     expect(await row(p.id)).toHaveLength(1);
   });
 
-  it("answers 202 until it lands, even long after the ticket's age limit", async () => {
+  it("answers 202 until it lands, resending while the request is fresh", async () => {
     const w = world();
     w.state.lands = false;
     const p = await prepared(w);
     expect(await submit(w, p)).toMatchObject({ httpStatus: 202, body: { status: "pending" } });
-    w.clock.now = new Date(NOW.getTime() + PAYMENT_TICKET_TTL_MS * 2);
     w.state.lands = true;
     expect(await submit(w, p)).toMatchObject({ httpStatus: 200, body: { status: "confirmed" } });
+    expect(w.state.sends).toBe(2);
+  });
+
+  it("never sends an old request, even for a gift it already recorded", async () => {
+    const w = world();
+    w.state.lands = false;
+    const p = await prepared(w);
+    await submit(w, p);
+    w.clock.now = new Date(NOW.getTime() + PAYMENT_TICKET_TTL_MS + 1000);
+    w.state.lands = true;
+    expect(await submit(w, p)).toMatchObject({ httpStatus: 202, body: { status: "pending" } });
+    expect(w.state.sends).toBe(1);
   });
 
   it.each<ClaimStatus>([{ state: "expired" }, { state: "failed", reason: "x" }])(

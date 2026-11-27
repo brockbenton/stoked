@@ -65,11 +65,13 @@ On a deployment with wallet payments, also set `SMOKE_SENDER_SECRET` to a throwa
 All on 2026-11-27 (UTC).
 
 - Smoke test passed on preview `stoked-git-g8-escrow-brockbentons-projects.vercel.app` (commit `e670b4a`, escrow off). It confirmed the genesis hash `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` (devnet). [Claim transaction](https://explorer.solana.com/tx/2nejcNSW7xkpXtQBVpMLq1o9XnsuWJJUTj7NX3mFpPNJ4WhA5ciyDuvEjERH3psvFTEzS5UdDqyZHmWE9FeuUJRQ?cluster=devnet): 4356918 raw tNVDA from the treasury to `8KDMyvNwrU3U3qtymiaudhmAKWDsEtnZEnqZ2kcVEx7S`.
+- Wallet smoke test passed on preview `stoked-git-wallet-pay-brockbentons-projects.vercel.app` (commit `18fa8ac`), paying with a stand-in test token and a simulated Phantom. [Payment and escrow](https://explorer.solana.com/tx/3PF34hDRY28w1utnqKFFLkUFdgkD1LugMfchtYqQZAWARky8tPz1LpBdcJAtNdaySZuxwVhaY3CzxjADRhAqEijM?cluster=devnet): 10000000 base units paid, 4356918 raw tNVDA locked. [Claim](https://explorer.solana.com/tx/5piVjDvs7ZvFqtqv9E8mV89bNsMN4vrSuhu6XsN1xPrhHmrUiYqq27YvRAs8S3MEeMgwyYgFdLxFzGmANjm1dRLy?cluster=devnet) to a second wallet.
 - On an earlier preview, anonymous reads of `gifts` and `prices`, with both the anon and publishable keys, returned no rows while a gift existed.
 
 ## Limits
 
 - Prices are built-in demo values while the `prices` table is empty. The API marks them "Demo price (not live)"; the app doesn't show that.
 - Not tested in Safari or on a phone.
-- The smoke test doesn't yet work with escrow on: it expects the claim to debit the treasury.
+- The first smoke test doesn't work with `STOKED_ESCROW=1`: it expects the claim to debit the treasury.
+- Wallet payments haven't been tried with the real Phantom app or with Circle's USDC.
 - Public devnet RPC can be slow: the smoke test took under 2 minutes.

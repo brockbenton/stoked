@@ -66,7 +66,7 @@ import { hashToken, newClaimToken, tokenMatches } from "./tokens";
 export const ESCROW_TTL_SECONDS = 30 * 86_400;
 /** Time allowed to create an escrow gift: the web client gives up after 20 seconds. */
 export const ESCROW_CREATE_TIMEOUT_MS = 15_000;
-/** A first submit this long after prepare is refused (the blockhash is long dead). */
+/** How long after prepare a payment may still be sent. After that a submit only reports on it. */
 export const PAYMENT_TICKET_TTL_MS = 10 * 60_000;
 /** SOL a paying wallet needs for fees and the new accounts' rent. */
 export const MIN_SENDER_LAMPORTS = 10_000_000n;
@@ -537,11 +537,12 @@ export function createGiftService(deps: ServiceDeps) {
     expiresAt: t.expiresAt,
   });
 
-  /** Send an accepted payment and report whether the gift is locked on chain. */
+  /** Send an accepted payment (while `send`) and report whether the gift is locked on chain. */
   async function settlePayment(
     pay: PaymentDeps & { escrow: EscrowDeps },
     id: string,
     tx: SignedClaim & { account: string },
+    send: boolean,
   ): Promise<SubmitResult> {
     const confirmed = (signature: string | null): SubmitResult => ({
       httpStatus: 200,
@@ -560,11 +561,13 @@ export function createGiftService(deps: ServiceDeps) {
     if (await locked()) {
       return confirmed((await statusOf(tx)).state === "confirmed" ? tx.signature : null);
     }
-    try {
-      await chain.sendClaim(tx);
-    } catch (err) {
-      // It may be on its way from an earlier call; the status checks decide.
-      logError(`send payment for gift ${id}`, err);
+    if (send) {
+      try {
+        await chain.sendClaim(tx);
+      } catch (err) {
+        // It may be on its way from an earlier call; the status checks decide.
+        logError(`send payment for gift ${id}`, err);
+      }
     }
     const polls = pay.confirmPolls ?? 20;
     for (let i = 0; i < polls; i++) {
@@ -640,8 +643,10 @@ export function createGiftService(deps: ServiceDeps) {
         pay.adapter.accept(paymentTerms(pay.adapter, ticket, token), bs58.decode(req.transaction), ticket.recent),
       );
       let row = await store.get(ticket.id);
+      // The price was fixed at prepare, so a late transaction is never sent.
+      const fresh = now().getTime() - Date.parse(ticket.issuedAt) <= PAYMENT_TICKET_TTL_MS;
       if (!row) {
-        if (now().getTime() - Date.parse(ticket.issuedAt) > PAYMENT_TICKET_TTL_MS) {
+        if (!fresh) {
           throw new ApiError("payment_rejected", "That payment request is too old. Start again; you weren't charged.");
         }
         await checkCap();
@@ -678,7 +683,7 @@ export function createGiftService(deps: ServiceDeps) {
       if (row && (row.escrowAccount !== tx.account || row.claimTokenHash !== ticket.tokenHash)) {
         throw invalidState("A different gift already has that id");
       }
-      return settlePayment(pay, ticket.id, tx);
+      return settlePayment(pay, ticket.id, tx, fresh);
     },
 
     async create(body: unknown, clientKey: string): Promise<CreateGiftResponse> {
