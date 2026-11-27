@@ -9,7 +9,7 @@
 ## What works today
 
 1. **Pick** a stock (NVDA, AAPL, SPY, TSLA or COST), $10, $25 or $50, a note, and whether it opens now or later.
-2. **Wrap** it and send the private link. The link preview shows a wrapped card without the contents.
+2. **Wrap** it and send the private link through the phone's share sheet, or copy it. The link preview shows a wrapped card without the contents.
 3. **Unwrap** it, swap for a different stock if you like, then **claim** it. The browser creates a wallet whose private key can't be exported, and the server sends the tokens to it.
 4. **Watch**: the sender's page updates as the gift is opened and claimed, and the wallet page shows the holdings.
 
@@ -76,7 +76,7 @@ Dev3pack (November 27–29, 2026) allows earlier work and asks teams to be trans
 
 ### Before
 
-Everything up to commit [`80a54c8`](https://github.com/brockbenton/stoked/commit/80a54c83a910e23f49b0b4fd3d39fcbecdbab9a3), merged 2026-11-27 at 01:19 UTC. Commits since then change only documentation unless listed under "During".
+Everything up to and including the merge of pull request [#9](https://github.com/brockbenton/stoked/pull/9), whose page shows the merge commit and time. Later changes to the code are listed under "During".
 
 | Work | Pull request |
 |---|---|
@@ -87,8 +87,9 @@ Everything up to commit [`80a54c8`](https://github.com/brockbenton/stoked/commit
 | Gift API and claim protocol | [#5](https://github.com/brockbenton/stoked/pull/5) |
 | UI connected to the API, browser wallet, browser tests | [#6](https://github.com/brockbenton/stoked/pull/6) |
 | Devnet deployment, smoke test, value rounding, UI label removal | [#7](https://github.com/brockbenton/stoked/pull/7) |
+| Share button, app icons, home link preview, amount and value display | [#9](https://github.com/brockbenton/stoked/pull/9) |
 
-At that commit, the smoke test passed on the live site ([claim transaction](https://explorer.solana.com/tx/48ojBPUCFYrJ8A5HEqkGbsz7WzdV4gnWYjAgZCzhmSEfdwp4msK51fNJFM3uGRv1JKjnZp55skccoFBxi348mCUv?cluster=devnet)).
+The smoke test last passed on the live site after #7, at commit [`80a54c8`](https://github.com/brockbenton/stoked/commit/80a54c83a910e23f49b0b4fd3d39fcbecdbab9a3) ([claim transaction](https://explorer.solana.com/tx/48ojBPUCFYrJ8A5HEqkGbsz7WzdV4gnWYjAgZCzhmSEfdwp4msK51fNJFM3uGRv1JKjnZp55skccoFBxi348mCUv?cluster=devnet)).
 
 ### During
 
