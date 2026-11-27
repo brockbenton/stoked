@@ -1,11 +1,7 @@
 import { formatUsd, type GiftValue } from "@stoked/shared";
 
-/** "Value $10.00" */
-export function ValueLine({ value }: { value: GiftValue }) {
-  return (
-    <p className="value">
-      <span className="value__dot" aria-hidden="true" />
-      <span>Value {formatUsd(value.valueCents)}</span>
-    </p>
-  );
+/** "Value $15.00", only once the value differs from the amount already shown above it. */
+export function ValueLine({ value, giftCents }: { value: GiftValue; giftCents: number }) {
+  if (value.valueCents === giftCents) return null;
+  return <p className="value">Value {formatUsd(value.valueCents)}</p>;
 }

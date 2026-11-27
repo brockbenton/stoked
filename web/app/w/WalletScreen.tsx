@@ -89,11 +89,12 @@ export function WalletScreen() {
                   <li key={h.ticker} className="holding" data-testid={`holding-${h.ticker}`}>
                     <span className="holding__name">
                       <span className="choice__sym">{stockSymbol(h.ticker)}</span>
-                      <span className="choice__name">
-                        {stockName(h.ticker)} · {h.ticker}
-                      </span>
+                      <span className="choice__name">{stockName(h.ticker)}</span>
                     </span>
-                    <span className="holding__amount">{h.sharesExact}</span>
+                    {/* Rounded like everywhere else; the exact balance stays on hover and in the markup. */}
+                    <span className="holding__amount" title={h.sharesExact} data-exact={h.sharesExact}>
+                      ≈ {h.shares}
+                    </span>
                   </li>
                 ))}
               </ul>

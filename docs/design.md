@@ -19,7 +19,9 @@ The demo uses valueless test tokens, so:
 |---|---|
 | "A real stock inside" | "A stock gift inside" |
 | "Send a real stock" | "Send a stock gift" |
-| "Live value" | "Value" |
+| "Live value" | "Value", with no dot, shown only when it differs from the gift amount |
+
+After wrapping, the main button opens the system share sheet ("Share with Maya"). Without one, Copy is the main button. "Open it as Maya" is a quiet link. Screens show share amounts to four decimals and name stocks without the token prefix.
 
 Hide the voice button and player until that stretch goal ships. Keep the eligibility footer on the reveal.
 
@@ -32,7 +34,6 @@ Hide the voice button and player until that stretch goal ships. Keep the eligibi
 | `gold-400` | `#F2C75C` | Bow |
 | `green-50` | `#EEF4F1` | Selected stock card |
 | `green-100` | `#DCE7E1` | Avatar |
-| `gain` | `#16794A` | Value dot |
 | `ink` | `#111111` | Primary text |
 | `ink-muted` | `#5F5F5A` | Labels, secondary text |
 | `ink-subtle` | `#6B6B6B` | Timestamps |

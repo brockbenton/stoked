@@ -20,6 +20,8 @@ test("01 compose", async ({ page }) => {
 });
 
 test("01b compose sent (sender's wrapped card)", async ({ page }) => {
+  // As on a phone, where there is a share sheet.
+  await page.addInitScript(() => Object.defineProperty(navigator, "share", { value: async () => {} }));
   await page.goto("/");
   await page.getByLabel("To", { exact: true }).fill("Maya");
   await page.getByLabel("From", { exact: true }).fill("Sam");

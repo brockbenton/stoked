@@ -5,7 +5,6 @@
   --gold-400: #f2c75c;
   --green-50: #eef4f1;
   --green-100: #dce7e1;
-  --gain: #16794a;
   --ink: #111111;
   --ink-muted: #5f5f5a;
   --ink-subtle: #6b6b6b;
@@ -432,6 +431,15 @@ a {
   font-weight: 600;
 }
 
+.sent__preview {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  color: var(--green-900);
+}
+
 .notice__link {
   display: inline-flex;
   align-items: center;
@@ -663,24 +671,14 @@ button.wcard {
 .ocard__shares {
   color: var(--ink-muted);
   font-size: 14px;
-  margin: 2px 0 10px;
+  margin-top: 2px;
 }
 
+/* Present only when the value has moved, so it carries its own spacing. */
 .value {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  margin-top: 10px;
   font-size: 14px;
   color: var(--ink);
-}
-
-.value__dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 6px;
-  border-radius: 50%;
-  background: var(--gain);
-  flex: none;
 }
 
 .notice {
@@ -1165,7 +1163,7 @@ button.wcard {
 .shares {
   color: var(--ink-muted);
   font-size: 16px;
-  margin: 2px 0 14px;
+  margin-top: 2px;
 }
 
 .note {
