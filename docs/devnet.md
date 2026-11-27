@@ -16,6 +16,8 @@ Token-2022 mints with Scaled UI Amount, 8 decimals. Each address is derived from
 | tTSLA | [`8fQ4sT2LuEYjq1QGpqAF3PXkokX7t2Eye9kweAf69RL7`](https://explorer.solana.com/address/8fQ4sT2LuEYjq1QGpqAF3PXkokX7t2Eye9kweAf69RL7?cluster=devnet) |
 | tCOST | [`8ZymMMA7qsojkgM9KZtdSSDqrm4DvRfEMSMY5yAmhmNJ`](https://explorer.solana.com/address/8ZymMMA7qsojkgM9KZtdSSDqrm4DvRfEMSMY5yAmhmNJ?cluster=devnet) |
 
+The [escrow program](escrow.md) is at [`eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB`](https://explorer.solana.com/address/eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB?cluster=devnet). The live app doesn't use it yet.
+
 ## Setup
 
 1. Copy `.env.example` to `.env`. Set `SOLANA_RPC_URL=https://api.devnet.solana.com` and `TREASURY_SECRET_KEY` to a devnet-only keypair (JSON byte array). Never commit or print it.
@@ -31,7 +33,9 @@ Token-2022 mints with Scaled UI Amount, 8 decimals. Each address is derived from
    | `SUPABASE_URL` | The Supabase project URL |
    | `SUPABASE_SERVICE_ROLE_KEY` | The service-role key, stored as a secret |
 
-6. Deploy a preview from the repo root: `vercel deploy --project stoked`.
+6. Deploy. Vercel builds a preview for each pull request and deploys production when a change is merged to `main`. To deploy a preview by hand, run `vercel deploy --project stoked` from the repo root.
+
+Escrow is off unless you set its two variables: see [turning it on](escrow.md#turning-it-on). To change a mint's multiplier, for example to show a dividend, run `pnpm --filter @stoked/chain multiplier tNVDA 1.002`.
 
 ## Smoke test
 
@@ -49,14 +53,14 @@ pnpm --filter @stoked/web test:smoke
 
 ## Last verified
 
-2026-11-27 (UTC), preview deployment `stoked-1a56wcawu-brockbentons-projects.vercel.app`.
+All on 2026-11-27 (UTC).
 
-- Genesis hash `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` (devnet).
-- Smoke test passed. [Claim transaction](https://explorer.solana.com/tx/3UUs4zCCAccT5gdAGYxgufmbxQ94DjQ5ELHbv7tXqug46AwPYD8NLLMuM5PWHJVqKHNUuSeGrqhpns7cZ8yyRkcJ?cluster=devnet): 4356918 raw tNVDA from the treasury to `9ETkqxS3kaVx9iKdcVk4NAXNx1EJQbtZsy6WuofyeuNi`.
-- Anonymous reads of `gifts` and `prices`, with both the anon and publishable keys, returned no rows while a gift existed.
+- Smoke test passed on preview `stoked-git-g8-escrow-brockbentons-projects.vercel.app` (commit `e670b4a`, escrow off). It confirmed the genesis hash `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` (devnet). [Claim transaction](https://explorer.solana.com/tx/2nejcNSW7xkpXtQBVpMLq1o9XnsuWJJUTj7NX3mFpPNJ4WhA5ciyDuvEjERH3psvFTEzS5UdDqyZHmWE9FeuUJRQ?cluster=devnet): 4356918 raw tNVDA from the treasury to `8KDMyvNwrU3U3qtymiaudhmAKWDsEtnZEnqZ2kcVEx7S`.
+- On an earlier preview, anonymous reads of `gifts` and `prices`, with both the anon and publishable keys, returned no rows while a gift existed.
 
 ## Limits
 
-- The `prices` table is empty, so the server uses its built-in demo prices. The API marks them "Demo price (not live)"; the app doesn't show that.
+- Prices are built-in demo values while the `prices` table is empty. The API marks them "Demo price (not live)"; the app doesn't show that.
 - Not tested in Safari or on a phone.
+- The smoke test doesn't yet work with escrow on: it expects the claim to debit the treasury.
 - Public devnet RPC can be slow: the smoke test took under 2 minutes.

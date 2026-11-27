@@ -1,47 +1,20 @@
-# Build plan
+# Architecture and contracts
 
-Target: Dev3pack, Nov 27–29, 2026. Main Solana track, devnet.
-
-## What the rules mean for us
-
-From the [official FAQ](https://hack.dev3pack.xyz/faq), read Nov 25, 2026:
-
-- Building early is allowed for Solana projects. Disclose before/during work in the README.
-- AI-generated code is allowed, but you must understand it and be able to explain it.
-- **Open source is mandatory.** The repo is private today.
-- **Video under 3 minutes, strict.** A real product demo, at a public link.
-- Submission: project info (optional contract address), images, video, repo, live link, team. Solo is fine; maximum 4.
-- Signals judged: eligibility, product clarity, real-world impact, demo quality, deployment, repo quality, **Solana/SDK depth**. Top 100 get code inspection and live demo verification.
-- Hard deadline Sunday Nov 29; exact UTC hour is in the dashboard.
-
-So a deployed link matters, and a treasury that just transfers tokens is thin on Solana depth. G8 (escrow) addresses that, once the basic flow works.
-
-## Scope
-
-| Tier | Contents |
-|---|---|
-| **Must** | Mints, API, web send → unwrap → claim on devnet, deployed link, video |
-| **Should** | Escrow program, conversation view |
-| **Deferred** | Group chip-in. Nothing is built before the Nov 27 window; revisit only after the 1:1 gate |
-| **If Mac** | iMessage extension |
-| **Could** | Price feed, voice note |
-| **Cut** | Real money, accounts, Base, embedded wallets, notifications, expiry and refunds (the treasury funds gifts, so nobody is owed one until escrow) |
+How Stoked is built, and the data and API contracts the code follows. Devnet or a local validator only.
 
 ## Architecture
 
 ```
-web (Next.js)  ──┐                       ┌── Postgres (Supabase)
-                 ├─▶ /api/* (same app) ──┤
-iOS extension  ──┘   treasury signer     └── Solana devnet, Token-2022
+web (Next.js) ──▶ /api/* (same app) ──┬── Postgres (Supabase)
+                  treasury signer     └── Solana devnet, Token-2022
 ```
 
 ```
 packages/shared/   zod schemas, types, money math, fixtures
-packages/chain/    Solana client, mint setup, transfers
+packages/chain/    Solana client, mint setup, transfers, escrow client
+programs/escrow/   Anchor escrow program
 supabase/          SQL migrations
 web/               Next.js UI and route handlers
-programs/          escrow (G8)
-ios/               host app and extension (G9)
 ```
 
 pnpm workspace. Vitest for tests; PGlite runs the real migrations without Docker; `solana-test-validator` covers chain tests; Playwright covers the browser.
@@ -96,7 +69,7 @@ alter table prices enable row level security;
 
 A gift is sized when it's created (the treasury funds it), so `price_cents` and `token_raw` are required and it starts `wrapped`. Swap updates `ticker`, `price_cents` and `token_raw`. RLS on, no public policies: only the server reads or writes. A second migration grants `service_role` select, insert and update, because Supabase may not grant new tables automatically.
 
-A third migration adds `escrow_account text`: the on-chain account holding an escrow gift's tokens, null for a gift the treasury transfers at claim time. It's set at creation and never changes. The Supabase store reads and writes it only when `ESCROW_PROGRAM_ID` is set.
+A third migration adds `escrow_account text`: the on-chain account holding an escrow gift's tokens, null for a gift the treasury transfers at claim time. It's set at creation and never changes. The Supabase store reads it wherever the column exists, whatever the server's settings, and writes it only for escrow gifts, so a database without this migration works while escrow is off.
 
 ## API
 
@@ -113,7 +86,9 @@ JSON. Errors: `{ error: { code, message } }`.
 
 With escrow on, routes and response shapes are the same; behaviour differs as described under [Escrow](#escrow).
 
-`GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening. "Token" is `Authorization: Bearer <claimToken>`. Rate-limit creation, since it draws down the treasury.
+`GET` also returns the current value with `{priceSource, priceUpdatedAt}` after opening. "Token" is `Authorization: Bearer <claimToken>`. Creation is rate-limited, since it draws down the treasury.
+
+Prices come from the `prices` table. For a ticker with no row, the server uses a built-in demo price and reports the source as `Demo price (not live)`. Nothing refreshes the table.
 
 ### Contract details
 
@@ -135,7 +110,7 @@ The zod schemas in `packages/shared/src/schemas.ts` are the source of truth; thi
 4. Send and confirm, then set `claimed`.
 5. On retry while `claiming`: look up the stored signature. Confirmed → `claimed`. Unknown and not past the height → 202. Past the height, after a finalized history lookup shows no landing → one caller may replace the signature by compare-and-swap. A transaction that landed with an error (seen at `confirmed` or later) moved nothing and is replaced the same way. The wallet stays fixed, and a claim naming a different wallet gets 409 `invalid_state`.
 
-Server code: `web/lib/server` (service with injected `GiftStore`, `ChainAdapter`, clock and rate limiter; Supabase store in production, SQL store on PGlite in tests). Creation is rate-limited twice: in memory per client IP (5 per minute, per instance; the IP comes from platform-set headers first), and durably by counting rows in `gifts` (200 per hour across all instances), since each claim to a new wallet also spends treasury SOL on rent. Request bodies are strict (unknown keys → 400 `validation_failed`). RPC failures return 503 `chain_unavailable` with a generic message; details go to the server log only.
+Server code: `web/lib/server` (service with injected `GiftStore`, `ChainAdapter`, clock and rate limiter; Supabase store in production, SQL store on PGlite in tests). Creation is rate-limited twice: in memory per client IP (5 per minute, and 100 per minute across all clients, both per instance; the IP comes from platform-set headers first), and durably by counting rows in `gifts` (200 per hour across all instances), since each claim to a new wallet also spends treasury SOL on rent. Request bodies are strict (unknown keys → 400 `validation_failed`). RPC failures return 503 `chain_unavailable` with a generic message; details go to the server log only.
 
 A pending claim moves forward only when the claim request is sent again, so the web client repeats it (same wallet) while the gift is `claiming`, including after a reload. `GET` never advances a claim.
 
@@ -163,57 +138,6 @@ Off by default. `ESCROW_PROGRAM_ID` enables the code; `STOKED_ESCROW=1` makes ne
 
 The link carries the token, `/g/:id#t=…`. The fragment stays out of server logs and preview crawlers.
 
-## Clients
+## Web client
 
-**Web:** `/` compose, `/g/:id` gift, `/w` wallet. Polls state every 3 seconds while the tab is visible (15 once claimed). Open Graph image shows a wrapped card and never the contents. The wallet is a non-extractable Ed25519 WebCrypto key in IndexedDB; clearing browser data loses it, which is acceptable on devnet and stated in the UI.
-
-**Conversation view:** `/demo` shows sender and recipient threads side by side using the real components and API, labeled "Prototype thread". Link previews are frozen, so without iOS this is how the live card is demonstrated.
-
-**iOS:** Messages exposes participants only as UUIDs, so the host app asks for a display name. `MSMessage.url` carries the gift id; its query carries the token.
-
-## Schedule
-
-| When | Work |
-|---|---|
-| Wed 25 – Thu 26 | Accounts. G0, then G1 and G2 in parallel |
-| Fri 27 | G3, G4, first deploy. **Noon: decide on the Mac** |
-| Sat 28 | G5 done by noon = 1:1 gate. Then G8, or G9 with a Mac |
-| Sat night | Feature freeze on anything not merged; record a backup video |
-| Sun 29 | G10, final video, submit hours before the cutoff |
-
-If the 1:1 gate slips past Saturday noon, cut G8.
-
-## Needed from the owner
-
-- [ ] Dev3pack: confirm you're accepted and read the exact deadline
-- [ ] Supabase project: URL and service-role key in `.env`
-- [ ] Vercel login and project
-- [ ] Devnet SOL for the treasury (faucets rate-limit, so do it early)
-- [ ] Choose a license
-- [ ] Make the repo public before submitting
-- [ ] Mac decision by Friday noon
-- [ ] ElevenLabs key, only if doing voice
-
-## Risks
-
-| Risk | Response |
-|---|---|
-| Double claim, stuck claim | Protocol above; G3 tests it |
-| Public devnet RPC is flaky | Configurable RPC; claim is retryable; backup video |
-| Market price barely moves: Thanksgiving is Nov 26, and US markets close for the weekend | Use the multiplier change as the visible on-chain event |
-| Unproven iMessage behavior: live-bubble buttons and sending from transcript style are undocumented | Device or Simulator spike first. Default: bubble tap opens the expanded view, which does the action |
-| `MSSession` update may move the message rather than change it in place | Let the live bubble refetch state; check it in the spike |
-| Thin Solana depth | G8 |
-| Agents break each other's work | G0 freezes the contracts; path ownership per goal |
-
-## Demo, 90 seconds
-
-1. First shares are awkward to gift; crypto links bounce you out of the chat.
-2. Send $10 of tNVDA. A wrapped card appears.
-3. Unwrap, claim, show the devnet transaction.
-4. The same card changes to Opened with its value; bump the multiplier and show the share count rise.
-5. State plainly: devnet test tokens, and what's next.
-
-## Stretch decision: escrow
-
-Gift PDA vault holding the tokens, enforcing open time and single claim on-chain. The claim is authorized by a per-gift claim key that signs the claim transaction, which binds the recipient, so an observed transaction can't be front-run and no secret goes on chain. Design, threat model and deploy steps: [escrow.md](escrow.md).
+`/` compose, `/g/:id` gift, `/w` wallet. After wrapping, the main button opens the system share sheet; without one, Copy is the main button. The gift page polls every 3 seconds while the tab is visible (15 once claimed). The Open Graph image shows a wrapped card and never the contents. The wallet is a non-extractable Ed25519 WebCrypto key in IndexedDB; clearing browser data loses it, which is acceptable on devnet and stated on the wallet screen.

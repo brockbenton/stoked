@@ -1,6 +1,6 @@
 /**
  * One 390x844 screenshot per screen and state, saved to test-results/screens
- * for comparison with mockups/png.
+ * for visual review.
  */
 import { expect, test } from "@playwright/test";
 import { giftUrl, ids, pinClock, screenshot } from "./helpers";
@@ -100,7 +100,7 @@ test("wallet", async ({ page }) => {
   await screenshot(page, "05-wallet");
 });
 
-test.describe("states the mockups don't show", () => {
+test.describe("loading, error and edge states", () => {
   test("loading", async ({ page }) => {
     await page.goto(giftUrl(ids.wrapped, { sim: "slow" }));
     await expect(page.getByLabel("Loading gift")).toBeVisible();

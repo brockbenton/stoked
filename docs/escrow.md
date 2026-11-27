@@ -1,8 +1,8 @@
-# Escrow program (G8)
+# Escrow program
 
 A small Anchor program that locks one gift's tokens in its own vault until the recipient claims them or the gift expires. Code: [`programs/escrow`](../programs/escrow), TypeScript client: [`packages/chain/escrow`](../packages/chain/escrow). Devnet and local validator only.
 
-The API uses it only when `STOKED_ESCROW=1`. The flag is off by default.
+The program is [deployed to devnet](#deployment). The API creates escrow gifts only when `STOKED_ESCROW=1`. The flag is off by default, and the live app doesn't set it.
 
 ## Framework
 
@@ -119,9 +119,7 @@ Swapping stays off because the program has no way to take tokens back before exp
 | `ESCROW_PROGRAM_ID` | The deployed program. Set it to enable the escrow code at all, and **keep it set while any escrow gift exists** |
 | `STOKED_ESCROW` | `1` makes new gifts escrow gifts. Requires `ESCROW_PROGRAM_ID` |
 
-Order: merge and let production deploy this code, apply `supabase/migrations/20261127000000_escrow.sql`, deploy the program, then set the variables.
-
-The server reads whole rows, so it runs on a database without the migration and still recognises an escrow gift when `ESCROW_PROGRAM_ID` is unset: it refuses to claim or swap it. **Code from before escrow does not.** It would pay an escrow gift from the treasury while the vault stays claimable by whoever has the link. Every deployment that shares the database (Preview and Production do today) must therefore run this code before the first escrow gift is created, and production must never be rolled back past it while escrow gifts exist.
+The server reads whole rows, so it runs on a database without the escrow migration and still recognises an escrow gift when `ESCROW_PROGRAM_ID` is unset: it refuses to claim or swap it. **Code from before escrow does not.** It would pay an escrow gift from the treasury while the vault stays claimable by whoever has the link. Every deployment that shares the database (Preview and Production do today) must therefore run this code before the first escrow gift is created, and production must never be rolled back past it while escrow gifts exist.
 
 ## Never pay twice
 
@@ -218,23 +216,44 @@ Program tests are in [`programs/escrow/tests/escrow.rs`](../programs/escrow/test
 
 On 2026-11-27, removing each of these checks in turn (open time, claim expiry, refund expiry, status, claim key, mint, recipient token account, mint allowlist, full-balance release) made at least one of these tests fail.
 
-## Deploying to devnet
+## Deployment
 
-Needs the owner's approval. Not done yet.
+Deployed to devnet on 2026-11-27.
 
-1. **Program keypair.** The program ID `eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB` belongs to a keypair at `programs/escrow/target/deploy/stoked_escrow-keypair.json` in the worktree that built G8. It's gitignored: back it up before removing that worktree, and copy it to the same path in the checkout you deploy from **before** building (otherwise the build creates a different one). If it's lost, generate a new one and update `declare_id!` and `ESCROW_PROGRAM_ID` in `packages/chain/escrow/program.ts`.
-2. **Deployer keypair**, separate from the treasury and never on the server. It becomes the upgrade authority. Fund it on devnet: the program is 238 KB, about 1.66 SOL of rent at local-validator rates, plus fees.
-3. Run `pnpm test:escrow`, then from the repo root:
+| | |
+|---|---|
+| Program | [`eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB`](https://explorer.solana.com/address/eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB?cluster=devnet) |
+| Deploy transaction | [`9NJ8pxkG…rLb`](https://explorer.solana.com/tx/9NJ8pxkGDWrwDDtsMVa1sEEfdjyqfZXG1ykUTofZUPXMS6zLST9SsSvZitMfwusKEKP37sSDWGtEdz7J6533rLb?cluster=devnet) |
+| Upgrade authority | `HM98RAuFNFeoYRRTVjgawCXkaNKPEMGXkbnFJRsNzFRU`, a deployer key that isn't the treasury and isn't on the server |
+| Size | 237,760 bytes, holding about 1.21 SOL of rent. After the deploy, the on-chain bytes matched the local build |
 
-   ```sh
-   solana program deploy programs/escrow/target/deploy/stoked_escrow.so \
-     --program-id programs/escrow/target/deploy/stoked_escrow-keypair.json \
-     --keypair <deployer.json> --upgrade-authority <deployer.json> --url devnet
-   solana program show eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB --url devnet
-   ```
+### Turning it on
 
-4. In the Supabase SQL editor run `supabase/migrations/20261127000000_escrow.sql`.
-5. Set `ESCROW_PROGRAM_ID` and `STOKED_ESCROW=1` for a Vercel preview, deploy it, and create, claim and check one gift on the explorer.
-6. Refunds, when gifts expire: `ESCROW_PROGRAM_ID=… pnpm --filter @stoked/chain escrow:refund` with the devnet `.env`.
+Not done yet: no escrow gift has been created or claimed through a deployed app.
+
+1. In the Supabase SQL editor, run `supabase/migrations/20261127000000_escrow.sql`.
+2. Make sure every deployment that shares the database runs code with escrow support ([why](#configuration)).
+3. Set `ESCROW_PROGRAM_ID` and `STOKED_ESCROW=1` for a Vercel preview, redeploy it, and create, claim and check one gift on the explorer.
+4. Only then set both for Production and redeploy.
 
 To roll back, unset `STOKED_ESCROW` only, and keep `ESCROW_PROGRAM_ID`.
+
+### Refunds
+
+When gifts expire, with the devnet `.env`:
+
+```sh
+ESCROW_PROGRAM_ID=eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB pnpm --filter @stoked/chain escrow:refund
+```
+
+### Upgrading, or deploying your own copy
+
+Run `pnpm test:escrow` first. Upgrading the program above takes the upgrade authority's keypair:
+
+```sh
+solana program deploy programs/escrow/target/deploy/stoked_escrow.so \
+  --program-id eXVAv3pDTpMfobKopghfV6BQui7WKx61qcoacRvbtdB \
+  --keypair <deployer.json> --upgrade-authority <deployer.json> --url devnet
+```
+
+For your own copy, generate a program keypair, put its address in `declare_id!` (`programs/escrow/src/lib.rs`) and `ESCROW_PROGRAM_ID` (`packages/chain/escrow/program.ts`), rebuild, and pass the keypair file as `--program-id`. Use a deployer keypair that isn't the treasury. Keypairs are never committed.

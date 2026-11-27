@@ -63,10 +63,9 @@ pnpm test:escrow   # not run in CI
 
 ## Documentation
 
-- [Build plan](docs/build-plan.md): architecture and contracts
-- [Escrow](docs/escrow.md): program design and threat model
+- [Architecture](docs/build-plan.md): data, API and claim protocol
+- [Escrow](docs/escrow.md): program design, threat model and deployment
 - [Devnet](docs/devnet.md): addresses, setup and verification
-- [Design](docs/design.md): screens and motion
 
 ## Hackathon disclosure
 
@@ -84,3 +83,8 @@ Dev3pack (November 27–29, 2026) allows earlier work and asks teams to disclose
 
 - Escrow program, TypeScript client, API support behind a feature flag, and design document ([#10](https://github.com/brockbenton/stoked/pull/10))
 - Escrow program deployed to devnet ([transaction](https://explorer.solana.com/tx/9NJ8pxkGDWrwDDtsMVa1sEEfdjyqfZXG1ykUTofZUPXMS6zLST9SsSvZitMfwusKEKP37sSDWGtEdz7J6533rLb?cluster=devnet))
+- MIT license and documentation cleanup
+
+## License
+
+[MIT](LICENSE)
