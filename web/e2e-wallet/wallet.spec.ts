@@ -239,6 +239,23 @@ test("iPhone: declining in Phantom keeps the gift and charges nothing", async ({
   await from.context.close();
 });
 
+test("iPhone in Brave: Brave's own wallet isn't mistaken for Phantom", async ({ browser, baseURL }) => {
+  const app = fakePhantomApp(undefined, sender.publicKey.toBase58());
+  const from = await phone(browser, baseURL!, app);
+  // What Brave injects: it says it is Phantom too.
+  await from.context.addInitScript(() => {
+    (window as unknown as Record<string, unknown>).solana = {
+      isPhantom: true,
+      isBraveWallet: true,
+      connect: async () => Promise.reject(new Error("no Brave wallet")),
+    };
+  });
+  await fillGift(from.page, "From Brave");
+  const page = await from.approve(from.page, "Connect Phantom");
+  await expect(page.getByText(/Paying from Phantom/)).toBeVisible();
+  await from.context.close();
+});
+
 test("the claim token reaches neither Phantom nor the server log", async () => {
   expect(tokens.length).toBeGreaterThan(0);
   expect(toPhantom.length).toBeGreaterThan(0);

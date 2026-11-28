@@ -25,6 +25,7 @@ export type WalletMode = "extension" | "app" | "none";
 
 interface Provider {
   isPhantom?: boolean;
+  isBraveWallet?: boolean;
   connect(): Promise<{ publicKey: { toString(): string } }>;
   signTransaction<T>(transaction: T): Promise<T>;
   disconnect?(): Promise<void>;
@@ -64,8 +65,8 @@ function save(s: Stored) {
 
 function provider(): Provider | null {
   const w = window as unknown as { phantom?: { solana?: Provider }; solana?: Provider };
-  const p = w.phantom?.solana ?? w.solana;
-  return p?.isPhantom ? p : null;
+  // Brave's built-in wallet also says it is Phantom.
+  return [w.phantom?.solana, w.solana].find((p) => p?.isPhantom && !p.isBraveWallet) ?? null;
 }
 
 function isPhone(): boolean {
