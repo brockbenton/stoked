@@ -14,6 +14,15 @@ Stoked runs on Solana **devnet**. The tokens are test tokens with no monetary va
 
 To prevent double payment, each claim's transaction signature is stored before sending and checked before any retry.
 
+### With wallet payments
+
+A deployment can have senders pay from [Phantom](https://phantom.com) in devnet USDC:
+
+- **Send:** connect, then approve one transaction that pays for the gift and locks the stock tokens in escrow. Both happen or neither does.
+- **Claim:** connect Phantom and the tokens go to that wallet, or create a wallet in the browser instead.
+
+On a phone, the page opens the Phantom app for each approval and comes back.
+
 ## Architecture
 
 | Part | Choice |
@@ -23,11 +32,11 @@ To prevent double payment, each claim's transaction signature is stored before s
 | Tokens | Solana Token-2022 mints with Scaled UI Amount, which can represent dividends and splits |
 | Escrow | Anchor program |
 
-A server-held treasury funds gifts and sends the transfers; senders don't pay.
+A server-held treasury issues the tokens and pays claim fees. It funds gifts itself unless wallet payments are on.
 
 ### Escrow
 
-The [escrow program](docs/escrow.md) locks each gift's tokens in its own vault, releases them once after the opening time, and allows a refund to the treasury after expiry. It is tested on a local validator and deployed to devnet, but **the live app doesn't use it yet**. It is not trustless: the server creates and signs every claim.
+The [escrow program](docs/escrow.md) locks each gift's tokens in its own vault, releases them once after the opening time, and allows a refund to the treasury after expiry. It is tested on a local validator and deployed to devnet; a deployment uses it when wallet payments or escrow are switched on. It is not trustless: the server signs every claim.
 
 ## Devnet addresses
 
@@ -54,7 +63,8 @@ pnpm test:escrow   # not run in CI
 
 - Devnet only. The test tokens are not securities.
 - Prices are demo values, not market data.
-- On the live app, gifts are not held in escrow.
+- An unclaimed wallet-paid gift can't be reclaimed in the app yet.
+- Wallet payments haven't been tested with the real Phantom app.
 - Anyone with a gift's link can claim it.
 - The recipient's wallet exists only in their browser. Clearing site data loses it.
 - Not yet tested in Safari or on a phone.
@@ -84,6 +94,7 @@ Dev3pack (November 27–29, 2026) allows earlier work and asks teams to disclose
 - Escrow program, TypeScript client, API support behind a feature flag, and design document ([#10](https://github.com/brockbenton/stoked/pull/10))
 - Escrow program deployed to devnet ([transaction](https://explorer.solana.com/tx/9NJ8pxkGDWrwDDtsMVa1sEEfdjyqfZXG1ykUTofZUPXMS6zLST9SsSvZitMfwusKEKP37sSDWGtEdz7J6533rLb?cluster=devnet))
 - MIT license and documentation cleanup
+- Wallet payments: pay with Phantom, claim to Phantom
 
 ## License
 

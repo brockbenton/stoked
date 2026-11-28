@@ -14,9 +14,19 @@
  * Escrow gifts (docs/escrow.md) lock their tokens at creation. The same steps
  * claim them, building the program's claim instead of a treasury transfer, and
  * the chain is read first: it is the authority on whether the gift was paid.
+ *
+ * With payments on, the sender's wallet pays for the gift and is its on-chain
+ * sender: prepare hands the wallet a transaction, submit verifies, co-signs and
+ * sends it (docs/escrow.md § Wallet-paid gifts).
  */
 import type { ChainAdapter, ClaimStatus, SignedClaim } from "@stoked/chain";
-import type { EscrowAdapter, EscrowGiftState } from "@stoked/chain/escrow";
+import {
+  PaymentRejectedError,
+  type EscrowAdapter,
+  type EscrowGiftState,
+  type PaymentAdapter,
+  type PaymentTerms,
+} from "@stoked/chain/escrow";
 import {
   ClaimGiftRequest,
   CreateGiftRequest,
@@ -24,7 +34,9 @@ import {
   DEMO_PRICE_SOURCE,
   MAX_OPENS_AHEAD_MS,
   OpenGiftRequest,
+  PrepareGiftRequest,
   PublicGift,
+  SubmitGiftRequest,
   SwapGiftRequest,
   WalletAddress,
   displayShares,
@@ -36,20 +48,28 @@ import {
   type CreateGiftResponse,
   type GiftValue,
   type MultiplierSchedule,
+  type PrepareGiftResponse,
+  type SubmitGiftResponse,
   type Ratio,
   type Ticker,
 } from "@stoked/shared";
 import { PublicKey } from "@solana/web3.js";
-import { randomUUID } from "node:crypto";
+import bs58 from "bs58";
+import { randomBytes, randomUUID } from "node:crypto";
 import { ApiError, invalidState, notFound } from "./errors";
 import type { RateLimiter } from "./rate-limit";
 import type { GiftRecord, GiftStore, NewGift } from "./store";
+import { readTicket, signTicket, type PaymentTicket } from "./ticket";
 import { hashToken, newClaimToken, tokenMatches } from "./tokens";
 
 /** How long after the later of creation and opensAt an escrow gift can be claimed. */
 export const ESCROW_TTL_SECONDS = 30 * 86_400;
 /** Time allowed to create an escrow gift: the web client gives up after 20 seconds. */
 export const ESCROW_CREATE_TIMEOUT_MS = 15_000;
+/** How long after prepare a payment may still be sent. After that a submit only reports on it. */
+export const PAYMENT_TICKET_TTL_MS = 10 * 60_000;
+/** SOL a paying wallet needs for fees and the new accounts' rent. */
+export const MIN_SENDER_LAMPORTS = 10_000_000n;
 
 export interface EscrowDeps {
   adapter: EscrowAdapter;
@@ -59,6 +79,16 @@ export interface EscrowDeps {
   createTimeoutMs?: number;
   /** Also stop waiting for the lock after this many status checks. */
   createConfirmPolls?: number;
+}
+
+export interface PaymentDeps {
+  adapter: PaymentAdapter;
+  /** Signs the terms the browser holds between prepare and submit. */
+  ticketKey: Uint8Array;
+  /** Display name of the payment token. */
+  symbol: string;
+  /** Status checks after sending before submit answers 202. */
+  confirmPolls?: number;
 }
 
 export interface ServiceDeps {
@@ -74,6 +104,8 @@ export interface ServiceDeps {
   creationCap?: { max: number; windowMs: number };
   /** Absent: no escrow at all. Escrow gifts are then refused, never paid from the treasury. */
   escrow?: EscrowDeps;
+  /** Senders pay from their own wallet; free creation is then refused. Needs `escrow`. */
+  payments?: PaymentDeps;
 }
 
 interface RequestSchema<T> {
@@ -109,6 +141,11 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   }
 }
 
+export interface SubmitResult {
+  httpStatus: 200 | 202;
+  body: SubmitGiftResponse;
+}
+
 export interface ClaimResult {
   httpStatus: 200 | 202;
   body: ClaimGiftResponse;
@@ -138,8 +175,18 @@ export function isValidWallet(wallet: unknown): wallet is string {
   }
 }
 
+/** Why the cluster would refuse a payment, in words a sender can act on. */
+function explainRejection(why: string): string {
+  if (/BlockhashNotFound/i.test(why)) return "That took too long to approve. Try again; you weren't charged.";
+  if (/insufficient (funds|lamports)|InsufficientFunds|"Custom":1\b/i.test(why)) {
+    return "The wallet doesn't have enough to pay for this gift. You weren't charged.";
+  }
+  return "Solana refused the payment. You weren't charged.";
+}
+
 export function createGiftService(deps: ServiceDeps) {
   const { store, chain, rateLimiter } = deps;
+  if (deps.payments && !deps.escrow) throw new Error("payments need the escrow");
   const now = deps.now ?? (() => new Date());
   const confirmPolls = deps.confirmPolls ?? 8;
   const confirmIntervalMs = deps.confirmIntervalMs ?? 500;
@@ -441,23 +488,212 @@ export function createGiftService(deps: ServiceDeps) {
     }
   }
 
+  /** Refuse an opening time in the past, or too far ahead for locked tokens. */
+  function checkOpensAt(opensAt: string | undefined, locked: boolean) {
+    if (opensAt && Date.parse(opensAt) <= now().getTime()) {
+      throw new ApiError("validation_failed", "opensAt must be in the future");
+    }
+    if (locked && opensAt && Date.parse(opensAt) > now().getTime() + MAX_OPENS_AHEAD_MS) {
+      throw new ApiError("validation_failed", "opensAt can be at most 365 days ahead");
+    }
+  }
+
+  /** Durable cap across instances and cold starts (the in-memory limiter is per instance). */
+  async function checkCap() {
+    const since = new Date(now().getTime() - creationCap.windowMs).toISOString();
+    if ((await store.countCreatedSince(since)) >= creationCap.max) {
+      throw new ApiError("rate_limited", "Gift limit reached for now; try again later");
+    }
+  }
+
+  function payments(): PaymentDeps & { escrow: EscrowDeps } {
+    if (!deps.payments) throw invalidState("Wallet payments aren't enabled here");
+    return { ...deps.payments, escrow: deps.escrow! };
+  }
+
+  /** `promise`, with any failure reported as the chain being unavailable. */
+  async function onChain<T>(what: string, promise: () => T | Promise<T>): Promise<T> {
+    try {
+      return await promise();
+    } catch (err) {
+      if (err instanceof PaymentRejectedError) {
+        logError(what, err);
+        throw new ApiError("payment_rejected", "That transaction doesn't match this gift. You weren't charged.");
+      }
+      logError(what, err);
+      throw new ApiError("chain_unavailable", "Couldn't reach Solana; try again shortly");
+    }
+  }
+
+  const paymentTerms = (adapter: PaymentAdapter, t: Omit<PaymentTicket, "recent">, claimToken: string): PaymentTerms => ({
+    giftId: t.id,
+    claimKey: adapter.claimKeyFor(claimToken, t.id),
+    seed: t.seed,
+    sender: t.sender,
+    ticker: t.ticker,
+    raw: BigInt(t.tokenRaw),
+    amount: BigInt(t.amount),
+    openAt: t.openAt,
+    expiresAt: t.expiresAt,
+  });
+
+  /** Send an accepted payment (while `send`) and report whether the gift is locked on chain. */
+  async function settlePayment(
+    pay: PaymentDeps & { escrow: EscrowDeps },
+    id: string,
+    tx: SignedClaim & { account: string },
+    send: boolean,
+  ): Promise<SubmitResult> {
+    const confirmed = (signature: string | null): SubmitResult => ({
+      httpStatus: 200,
+      body: { status: "confirmed", id, signature },
+    });
+    const pending: SubmitResult = { httpStatus: 202, body: { status: "pending", id, signature: tx.signature } };
+    /** Null when the chain can't be read, which proves nothing either way. */
+    const locked = () =>
+      pay.escrow.adapter.read(tx.account).then(
+        (r) => r.gift !== null,
+        (err: unknown) => {
+          logError(`read paid gift ${id}`, err);
+          return null;
+        },
+      );
+    if (await locked()) {
+      return confirmed((await statusOf(tx)).state === "confirmed" ? tx.signature : null);
+    }
+    if (send) {
+      try {
+        await chain.sendClaim(tx);
+      } catch (err) {
+        // It may be on its way from an earlier call; the status checks decide.
+        logError(`send payment for gift ${id}`, err);
+      }
+    }
+    const polls = pay.confirmPolls ?? 20;
+    for (let i = 0; i < polls; i++) {
+      const { state } = await statusOf(tx);
+      if (state === "confirmed") return confirmed(tx.signature);
+      if (state !== "pending") {
+        // An earlier transaction for this gift may be the one that landed.
+        const exists = await locked();
+        if (exists) return confirmed(null);
+        if (exists === null) return pending;
+        throw new ApiError("payment_rejected", `The payment didn't go through, so no ${pay.symbol} left the wallet. Try again.`);
+      }
+      await sleep(confirmIntervalMs);
+    }
+    return pending;
+  }
+
   return {
+    /** Step 1 of a wallet-paid gift: price it and build the transaction for the sender's wallet. */
+    async prepare(body: unknown, clientKey: string): Promise<PrepareGiftResponse> {
+      const pay = payments();
+      const { gift: req, senderWallet } = parseRequest(PrepareGiftRequest, body);
+      if (!isValidWallet(senderWallet)) throw new ApiError("invalid_wallet", "That isn't a Solana wallet address");
+      checkOpensAt(req.opensAt, true);
+      if (!rateLimiter.take(clientKey)) throw new ApiError("rate_limited", "Too many gifts; try again in a minute");
+      await checkCap();
+      const p = await price(req.ticker);
+      const raw = usdToRaw(req.usdCents, p.usdCents, await multiplier(req.ticker));
+      const decimals = await onChain("read payment mint", () => pay.adapter.decimals());
+      const amount = BigInt(req.usdCents) * 10n ** BigInt(decimals - 2);
+      const funds = await onChain("read sender funds", () => pay.adapter.funds(senderWallet));
+      if (funds.payment < amount) {
+        throw new ApiError("insufficient_funds", `This wallet needs ${req.usdCents / 100} ${pay.symbol} on devnet.`);
+      }
+      if (funds.lamports < MIN_SENDER_LAMPORTS) {
+        throw new ApiError("insufficient_funds", "This wallet needs at least 0.01 devnet SOL for fees and storage.");
+      }
+      const id = randomUUID();
+      const token = newToken();
+      const openAt = req.opensAt ? Math.ceil(Date.parse(req.opensAt) / 1000) : 0;
+      const terms: Omit<PaymentTicket, "recent"> = {
+        id,
+        seed: randomBytes(16).toString("hex"),
+        sender: senderWallet,
+        ticker: req.ticker,
+        usdCents: req.usdCents,
+        priceCents: p.usdCents,
+        tokenRaw: raw.toString(),
+        amount: amount.toString(),
+        senderName: req.senderName,
+        recipientName: req.recipientName,
+        note: req.note ?? null,
+        opensAt: req.opensAt ? new Date(req.opensAt).toISOString() : null,
+        openAt,
+        expiresAt: Math.max(nowSeconds(), openAt) + ESCROW_TTL_SECONDS,
+        tokenHash: hashToken(token),
+        issuedAt: now().toISOString(),
+      };
+      const built = await onChain("build paid gift", () => pay.adapter.build(paymentTerms(pay.adapter, terms, token)));
+      const ticket = signTicket(pay.ticketKey, { ...terms, recent: built.recent });
+      return { id, claimToken: token, transaction: bs58.encode(built.transaction), ticket };
+    },
+
+    /** Step 2: verify the wallet-signed transaction, co-sign, record and send it. Safe to repeat. */
+    async submit(token: string | null, body: unknown): Promise<SubmitResult> {
+      const pay = payments();
+      const req = parseRequest(SubmitGiftRequest, body);
+      const ticket = readTicket(pay.ticketKey, req.ticket);
+      if (!ticket) throw new ApiError("validation_failed", "That payment request isn't valid");
+      if (!token) throw new ApiError("unauthorized", "Missing claim token (Authorization: Bearer <token>)");
+      if (!tokenMatches(token, ticket.tokenHash)) throw new ApiError("forbidden", "That token doesn't belong to this gift");
+      const tx = await onChain(`accept payment for gift ${ticket.id}`, () =>
+        pay.adapter.accept(paymentTerms(pay.adapter, ticket, token), bs58.decode(req.transaction), ticket.recent),
+      );
+      let row = await store.get(ticket.id);
+      // The price was fixed at prepare, so a late transaction is never sent.
+      const fresh = now().getTime() - Date.parse(ticket.issuedAt) <= PAYMENT_TICKET_TTL_MS;
+      if (!row) {
+        if (!fresh) {
+          throw new ApiError("payment_rejected", "That payment request is too old. Start again; you weren't charged.");
+        }
+        await checkCap();
+        const why = await onChain("simulate payment", () => pay.adapter.simulate(tx.transaction));
+        if (why) {
+          logError(`simulate payment for gift ${ticket.id}`, new Error(why));
+          throw new ApiError("payment_rejected", explainRejection(why));
+        }
+        // The row is written first, so money never moves without a record of the gift.
+        try {
+          await store.insert({
+            id: ticket.id,
+            escrowAccount: tx.account,
+            senderName: ticket.senderName,
+            recipientName: ticket.recipientName,
+            ticker: ticket.ticker,
+            usdCents: ticket.usdCents,
+            priceCents: ticket.priceCents,
+            tokenRaw: ticket.tokenRaw,
+            note: ticket.note,
+            opensAt: ticket.opensAt,
+            claimTokenHash: ticket.tokenHash,
+            createdAt: now().toISOString(),
+          });
+        } catch (err) {
+          // A concurrent submit may have written it.
+          row = await store.get(ticket.id);
+          if (!row) {
+            logError(`save paid gift ${ticket.id}`, err);
+            throw new ApiError("payment_rejected", "Couldn't save the gift, so nothing was sent. Try again in a minute.");
+          }
+        }
+      }
+      if (row && (row.escrowAccount !== tx.account || row.claimTokenHash !== ticket.tokenHash)) {
+        throw invalidState("A different gift already has that id");
+      }
+      return settlePayment(pay, ticket.id, tx, fresh);
+    },
+
     async create(body: unknown, clientKey: string): Promise<CreateGiftResponse> {
+      if (deps.payments) throw new ApiError("forbidden", "Gifts here are paid from a connected wallet");
       const started = Date.now();
       const req = parseRequest(CreateGiftRequest, body);
-      if (req.opensAt && Date.parse(req.opensAt) <= now().getTime()) {
-        throw new ApiError("validation_failed", "opensAt must be in the future");
-      }
       const locks = deps.escrow?.createGifts ? deps.escrow : undefined;
-      if (locks && req.opensAt && Date.parse(req.opensAt) > now().getTime() + MAX_OPENS_AHEAD_MS) {
-        throw new ApiError("validation_failed", "opensAt can be at most 365 days ahead");
-      }
+      checkOpensAt(req.opensAt, locks !== undefined);
       if (!rateLimiter.take(clientKey)) throw new ApiError("rate_limited", "Too many gifts; try again in a minute");
-      // Durable cap across instances and cold starts (the in-memory limiter is per instance).
-      const since = new Date(now().getTime() - creationCap.windowMs).toISOString();
-      if ((await store.countCreatedSince(since)) >= creationCap.max) {
-        throw new ApiError("rate_limited", "Gift limit reached for now; try again later");
-      }
+      await checkCap();
       const p = await price(req.ticker);
       const m = await multiplier(req.ticker);
       const raw = usdToRaw(req.usdCents, p.usdCents, m);

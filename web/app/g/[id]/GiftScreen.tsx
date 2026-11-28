@@ -4,12 +4,14 @@ import { formatUsd, TICKERS, type PublicGift, type Ticker } from "@stoked/shared
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CardMeta, OpenedCard, WrappedCard } from "@/components/Cards";
+import { ClaimActions, type WalletChoice } from "@/components/ClaimActions";
 import { GiftBox } from "@/components/GiftBox";
 import { Sheet } from "@/components/Sheet";
 import { ValueLine } from "@/components/ValueLine";
 import { GiftClientError, getGiftClient, getWallet, readTokenFromHash } from "@/lib/client";
+import { connectedAddress, takePhantomReturn } from "@/lib/client/phantom";
 import { useGiftPoll } from "@/lib/client/use-gift-poll";
-import { formatOpensAt, shortAddress, stockName, stockSymbol } from "@/lib/format";
+import { explorerAddressUrl, formatOpensAt, shortAddress, stockName, stockSymbol } from "@/lib/format";
 
 type Load = { k: "loading" } | { k: "error"; code: string } | { k: "ready"; gift: PublicGift };
 type SheetState = null | "box" | "unwrapping" | "reveal";
@@ -45,6 +47,11 @@ export function GiftScreen({ id }: { id: string }) {
   const [alreadyClaimed, setAlreadyClaimed] = useState(false);
   const [justClaimed, setJustClaimed] = useState(false);
   const [offline, setOffline] = useState(false);
+  /** Why a trip to the Phantom app didn't connect. */
+  const [walletNotice, setWalletNotice] = useState<string | null>(null);
+  /** The claimed wallet, when it's the Phantom wallet connected here. */
+  const [phantomWallet, setPhantomWallet] = useState<string | null>(null);
+  const choice = useRef<WalletChoice>("browser");
   const polling = useRef(false);
   // Bumped when this tab changes the gift, so an older background poll can't undo it.
   const version = useRef(0);
@@ -83,6 +90,9 @@ export function GiftScreen({ id }: { id: string }) {
   const closeSheet = useCallback(() => setSheet(null), []);
 
   useEffect(() => {
+    // First: a reply from the Phantom app puts the page's address (and token) back.
+    const back = takePhantomReturn();
+    if (back && !back.ok) setWalletNotice(back.message);
     setToken(readTokenFromHash(window.location.hash));
     setOffline(!navigator.onLine);
     // Pasting the private link over the public one only changes the fragment: no reload.
@@ -115,10 +125,13 @@ export function GiftScreen({ id }: { id: string }) {
       const mine = await getWallet()
         .peekAddress()
         .catch(() => null);
+      const phantom = connectedAddress();
+      const to = g.status === "claimed" ? g.recipientWallet : null;
       setGift(g);
       setClaim({ k: "idle" });
       setSheet(null);
-      if (g.status === "claimed" && g.recipientWallet === mine) setJustClaimed(true);
+      if (to && to === phantom) setPhantomWallet(to);
+      if (to && (to === mine || to === phantom)) setJustClaimed(true);
       else setAlreadyClaimed(true);
     },
     [setGift],
@@ -216,12 +229,26 @@ export function GiftScreen({ id }: { id: string }) {
     }
   }
 
-  async function doClaim() {
+  async function doClaim(chosen?: WalletChoice) {
     if (claim.k === "sending") return;
+    // A retry goes to the wallet picked the first time.
+    if (chosen) choice.current = chosen;
+    setWalletNotice(null);
     setClaim({ k: "sending" });
     try {
+      let wallet: string;
       // A claim in progress is bound to its wallet; retries must reuse it.
-      const wallet = gift?.status === "claiming" ? gift.recipientWallet : await getWallet().getAddress();
+      if (gift?.status === "claiming") wallet = gift.recipientWallet;
+      else if (choice.current === "browser") wallet = await getWallet().getAddress();
+      else {
+        const phantom = connectedAddress();
+        if (!phantom) {
+          setClaim({ k: "failed", message: "Phantom isn't connected any more. Nothing was sent." });
+          choice.current = "browser";
+          return;
+        }
+        wallet = phantom;
+      }
       const res = await getGiftClient().claimGift(id, token, wallet);
       if (res.status === "claimed") await finishClaim(res.gift);
       else {
@@ -292,6 +319,12 @@ export function GiftScreen({ id }: { id: string }) {
         </div>
       )}
 
+      {walletNotice && (
+        <p className="error" role="alert">
+          {walletNotice}
+        </p>
+      )}
+
       {load.k === "loading" && <LoadingCard />}
       {load.k === "error" && <LoadError code={load.code} onRetry={fetchGift} />}
 
@@ -313,8 +346,8 @@ export function GiftScreen({ id }: { id: string }) {
             <div id="gift-notice" tabIndex={-1} className={`notice ${justClaimed ? "notice--ok" : ""}`} role="status">
               {justClaimed ? (
                 <>
-                  <strong>Claimed.</strong> ≈ {gift.value.shares} {stockSymbol(gift.ticker)} is in your wallet{" "}
-                  {shortAddress(gift.recipientWallet)}.
+                  <strong>Claimed.</strong> ≈ {gift.value.shares} {stockSymbol(gift.ticker)} is in your{" "}
+                  {phantomWallet === gift.recipientWallet ? "Phantom wallet" : "wallet"} {shortAddress(gift.recipientWallet)}.
                 </>
               ) : isRecipient ? (
                 <>
@@ -327,7 +360,22 @@ export function GiftScreen({ id }: { id: string }) {
                   {shortAddress(gift.recipientWallet)}.
                 </>
               )}
-              {isRecipient && (
+              {isRecipient && phantomWallet === gift.recipientWallet && (
+                <>
+                  <p>To see it in Phantom, turn on Testnet Mode (Solana Devnet).</p>
+                  <p>
+                    <a
+                      href={explorerAddressUrl(gift.recipientWallet)}
+                      className="notice__link"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      See your wallet on Solana Explorer
+                    </a>
+                  </p>
+                </>
+              )}
+              {isRecipient && phantomWallet !== gift.recipientWallet && (
                 <p>
                   <Link href="/w" className="notice__link">
                     See your wallet
@@ -490,7 +538,7 @@ function Reveal({
 }: {
   gift: Extract<PublicGift, { status: "opened" | "claiming" | "claimed" }>;
   claim: Claim;
-  onClaim: () => void;
+  onClaim: (choice?: WalletChoice) => void;
   onSwap: (t: Ticker) => Promise<void>;
 }) {
   const [swapping, setSwapping] = useState(false);
@@ -536,19 +584,9 @@ function Reveal({
         />
       ) : (
         <div className="actions">
-          <ClaimStatusPanel claim={claim} onRetry={onClaim} />
+          <ClaimStatusPanel claim={claim} onRetry={() => onClaim()} />
           {(claim.k === "idle" || claim.k === "sending") && (
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={onClaim}
-              // Stay focusable while sending (aria-disabled), so focus isn't dropped to <body>.
-              disabled={gift.status !== "opened"}
-              aria-disabled={claim.k === "sending"}
-              aria-busy={claim.k === "sending"}
-            >
-              {claim.k === "sending" ? "Claiming…" : "Claim to my wallet"}
-            </button>
+            <ClaimActions sending={claim.k === "sending"} enabled={gift.status === "opened"} onClaim={onClaim} />
           )}
           {gift.status === "opened" && gift.swappable !== false && claim.k !== "pending" && claim.k !== "expired" && (
             <button

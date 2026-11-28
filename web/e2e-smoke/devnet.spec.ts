@@ -30,6 +30,9 @@ async function device(browser: Browser, baseURL: string): Promise<Page> {
 const rawOf = (balances: TokenBalance[] | null | undefined, owner: string) =>
   BigInt(balances?.find((b) => b.owner === owner && b.mint === mint)?.uiTokenAmount.amount ?? "0");
 
+// Free creation is closed on a deployment with wallet payments: wallet.spec.ts covers those.
+test.skip(Boolean(process.env.SMOKE_SENDER_SECRET), "This deployment takes payment from a wallet");
+
 test("create, unwrap and claim a gift on devnet", async ({ browser, baseURL }) => {
   expect(await assertSafeCluster(connection)).toBe("devnet");
   console.log(`genesis hash: ${await connection.getGenesisHash()} (devnet)`);

@@ -11,7 +11,7 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "test:e2e": "pnpm --filter @stoked/web test:e2e",
-    "test:escrow": "cd programs/escrow && cargo build-sbf && cargo test && cd ../.. && pnpm --filter @stoked/chain test:escrow && pnpm --filter @stoked/web test:escrow"
+    "test:escrow": "cd programs/escrow && cargo build-sbf && cargo test && cd ../.. && pnpm --filter @stoked/chain test:escrow && pnpm --filter @stoked/web test:escrow && pnpm --filter @stoked/web test:wallet"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

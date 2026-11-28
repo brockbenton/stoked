@@ -1,5 +1,14 @@
 /** GiftClient over the real /api routes (docs/build-plan.md § API). */
-import { ApiError, ClaimGiftResponse, CreateGiftResponse, PublicGift, WalletResponse } from "@stoked/shared";
+import {
+  ApiError,
+  AppConfig,
+  ClaimGiftResponse,
+  CreateGiftResponse,
+  PrepareGiftResponse,
+  PublicGift,
+  SubmitGiftResponse,
+  WalletResponse,
+} from "@stoked/shared";
 import { GiftClientError, type GiftClient } from "./types";
 
 const TIMEOUT_MS = 20_000;
@@ -53,6 +62,9 @@ export function createHttpClient(opts: HttpClientOptions = {}): GiftClient {
   const giftPath = (id: string, action = "") => `/api/gifts/${encodeURIComponent(id)}${action}`;
 
   return {
+    getConfig: () => request("/api/config", AppConfig),
+    prepareGift: (req) => request("/api/gifts/prepare", PrepareGiftResponse, { post: true, body: req }),
+    submitGift: (token, req) => request("/api/gifts/submit", SubmitGiftResponse, { post: true, token, body: req }),
     createGift: (req) => request("/api/gifts", CreateGiftResponse, { post: true, body: req }),
     getGift: (id) => request(giftPath(id), PublicGift),
     openGift: (id, token) => request(giftPath(id, "/open"), PublicGift, { post: true, token }),

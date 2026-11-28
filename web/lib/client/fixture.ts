@@ -119,7 +119,13 @@ export function createFixtureClient(opts: FixtureClientOptions = {}): GiftClient
     }
   }
 
+  // UI tests run without wallet payments; the real flow is covered by e2e-wallet.
+  const noPayments = () => Promise.reject(new GiftClientError("invalid_state", "Wallet payments aren't enabled here"));
+
   return {
+    getConfig: () => Promise.resolve({ payment: null }),
+    prepareGift: noPayments,
+    submitGift: noPayments,
     createGift: (req: CreateGiftRequest) =>
       respond(() => {
         const id = crypto.randomUUID();
